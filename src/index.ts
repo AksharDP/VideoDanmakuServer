@@ -28,20 +28,35 @@ app.use('/*', honoCors({
 }));
 
 app.post("/signup", zValidator("json", signupSchema), async (c) => {
-    const body = c.req.valid("json");
-    const result = await signupUser(body);
-    return c.json(result, result.status as any);
+    try {
+        const body = c.req.valid("json");
+        const result = await signupUser(body);
+        return c.json(result, result.status as any);
+    } catch (error) {
+        console.error("Error signing up:", error);
+        return c.json({ error: "Missing or invalid parameters" }, 400);
+    }
 });
 
 app.post("/login", zValidator("json", loginSchema), async (c) => {
-    const body = c.req.valid("json");
-    const result = await loginUser(body);
-    return c.json(result, result.status as any);
+    try {
+        const body = c.req.valid("json");
+        const result = await loginUser(body);
+        return c.json(result, result.status as any);
+    } catch (error) {
+        console.error("Error logging in:", error);
+        return c.json({ error: "Missing or invalid parameters" }, 400);
+    }
 });
 
 app.post("/forgot-password", async (c) => {
-    const result = await forgotPassword();
-    return c.json(result);
+    try {
+        const result = await forgotPassword();
+        return c.json(result);
+    } catch (error) {
+        console.error("Error processing forgot password request:", error);
+        return c.json({ error: "Failed to process request" }, 500);
+    }
 });
 
 
