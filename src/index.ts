@@ -3,8 +3,6 @@ import { validateOrInitDatabase, getComments, addComment } from "./db/db";
 import { rateLimiter } from "./rateLimit";
 import packageJson from "../package.json";
 
-
-
 const app = new Hono();
 
 app.get("/", (c) => {
@@ -19,22 +17,22 @@ app.get("/ping", (c) => {
     return c.json({ status: "ok", timestamp: new Date().toISOString() });
 });
 
-app.get("/rateLimit/status", async (c) => {
-    try {
-        const { ip, username } = c.req.query();
-        const status = rateLimiter.getStatus(ip, username);
-        return c.json({
-            success: true,
-            data: status,
-        });
-    } catch (error) {
-        console.error("Error getting rate limit status:", error);
-        return c.json(
-            { success: false, error: "Failed to get rate limit status" },
-            500
-        );
-    }
-});
+// app.get("/rateLimit/status", async (c) => {
+//     try {
+//         const { ip, username } = c.req.query();
+//         const status = rateLimiter.getStatus(ip, username);
+//         return c.json({
+//             success: true,
+//             data: status,
+//         });
+//     } catch (error) {
+//         console.error("Error getting rate limit status:", error);
+//         return c.json(
+//             { success: false, error: "Failed to get rate limit status" },
+//             500
+//         );
+//     }
+// });
 
 app.get("/getComments", async (c) => {
     try {
