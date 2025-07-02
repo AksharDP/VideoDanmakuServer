@@ -5,6 +5,7 @@ services:
     container_name: danmaku-server
     environment:
       DATABASE_URL: ${DATABASE_URL:-postgres://username:password@host:5432/database}
+      JWT_SECRET: ${JWT_SECRET:-}
       NODE_ENV: production
       PORT: ${PORT:-3000}
       DAILY_LIMIT: ${DAILY_LIMIT:-100}
