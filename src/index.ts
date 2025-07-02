@@ -16,16 +16,16 @@ import { cors as honoCors } from 'hono/cors';
 
 const app = new Hono();
 
-// app.use('/*', honoCors({
-//     origin: [
-//         'https://www.youtube.com',
-//         'https://youtube.com'
-//     ],
-//     allowMethods: ['GET', 'POST'],
-//     allowHeaders: ['Content-Type', 'Authorization', 'X-Forwarded-For', 'X-Real-IP'],
-//     credentials: true,
-//     exposeHeaders: ['Content-Length', 'X-Request-ID'],
-// }));
+app.use('/*', honoCors({
+    origin: [
+        'https://www.youtube.com',
+        'https://youtube.com'
+    ],
+    allowMethods: ['GET', 'POST'],
+    allowHeaders: ['Content-Type', 'Authorization', 'X-Forwarded-For', 'X-Real-IP'],
+    credentials: true,
+    exposeHeaders: ['Content-Length', 'X-Request-ID'],
+}));
 
 app.post("/signup", zValidator("json", signupSchema), async (c) => {
     try {
