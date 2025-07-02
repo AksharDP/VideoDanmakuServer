@@ -27,6 +27,46 @@ app.use('/*', honoCors({
     exposeHeaders: ['Content-Length', 'X-Request-ID'],
 }));
 
+app.get("/signup", (c) => {
+    return c.html(`
+        <h1>Signup Endpoint</h1>
+        <p>This endpoint accepts POST requests with JSON data.</p>
+        <p>Required fields: email, username, password</p>
+        <form method="POST" action="/signup">
+            <div>
+                <label>Email: <input type="email" name="email" required /></label>
+            </div>
+            <div>
+                <label>Username: <input type="text" name="username" required /></label>
+            </div>
+            <div>
+                <label>Password: <input type="password" name="password" required /></label>
+            </div>
+            <button type="submit">Sign Up</button>
+        </form>
+    `);
+});
+
+app.get("/login", (c) => {
+    return c.html(`
+        <h1>Login Endpoint</h1>
+        <p>This endpoint accepts POST requests with JSON data.</p>
+        <p>Required fields: emailOrUsername, password, rememberMe (optional)</p>
+        <form method="POST" action="/login">
+            <div>
+                <label>Email or Username: <input type="text" name="emailOrUsername" required /></label>
+            </div>
+            <div>
+                <label>Password: <input type="password" name="password" required /></label>
+            </div>
+            <div>
+                <label><input type="checkbox" name="rememberMe" /> Remember Me</label>
+            </div>
+            <button type="submit">Login</button>
+        </form>
+    `);
+});
+
 app.post("/signup", zValidator("json", signupSchema), async (c) => {
     try {
         const body = c.req.valid("json");
