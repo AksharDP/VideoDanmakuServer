@@ -14,7 +14,7 @@ if (!connectionString) {
 }
 
 const client = postgres(connectionString);
-export const db = drizzle(client, { schema });
+const db = drizzle(client, { schema });
 
 export async function runMigrations() {
     try {
@@ -31,11 +31,13 @@ export async function runMigrations() {
 
 export async function createTestSchema() {
     try {
-        // Create enums first
-        await db.execute(sql`CREATE TYPE scroll_mode_enum AS ENUM('slide', 'top', 'bottom');`);
-        await db.execute(sql`CREATE TYPE font_size_enum AS ENUM('small', 'normal', 'large');`);
+        await db.execute(
+            sql`CREATE TYPE scroll_mode_enum AS ENUM('slide', 'top', 'bottom');`
+        );
+        await db.execute(
+            sql`CREATE TYPE font_size_enum AS ENUM('small', 'normal', 'large');`
+        );
 
-        // Create tables
         await db.execute(sql`
             CREATE TABLE users (
                 id serial PRIMARY KEY NOT NULL,
@@ -69,7 +71,6 @@ export async function createTestSchema() {
             );
         `);
 
-        // Add foreign key constraints
         await db.execute(sql`
             ALTER TABLE comments 
             ADD CONSTRAINT comments_user_id_users_id_fk 
@@ -82,9 +83,9 @@ export async function createTestSchema() {
             FOREIGN KEY (video_id) REFERENCES videos(id) ON DELETE cascade;
         `);
 
-        // Add index
-        await db.execute(sql`CREATE INDEX user_comments_idx ON comments USING btree (user_id);`);
-
+        await db.execute(
+            sql`CREATE INDEX user_comments_idx ON comments USING btree (user_id);`
+        );
     } catch (error) {
         console.error("Error creating test schema:", error);
         throw error;
@@ -187,22 +188,21 @@ export async function addComment(
 
 export async function clearDatabase() {
     try {
-        await db.execute(sql`TRUNCATE TABLE comments, users, videos RESTART IDENTITY CASCADE;`);
+        await db.execute(
+            sql`TRUNCATE TABLE comments, users, videos RESTART IDENTITY CASCADE;`
+        );
     } catch (error) {
-        // This can fail if the tables do not exist yet, which is fine.
     }
 }
 
 export async function dropAndRecreateSchema() {
     try {
-        // Drop tables in reverse order of dependencies using raw SQL
         await db.execute(sql`DROP TABLE IF EXISTS comments CASCADE;`);
         await db.execute(sql`DROP TABLE IF EXISTS videos CASCADE;`);
         await db.execute(sql`DROP TABLE IF EXISTS users CASCADE;`);
         await db.execute(sql`DROP TYPE IF EXISTS scroll_mode_enum CASCADE;`);
         await db.execute(sql`DROP TYPE IF EXISTS font_size_enum CASCADE;`);
-        
-        // Create schema directly for testing
+
         await createTestSchema();
     } catch (error) {
         console.error("Error dropping and recreating schema:", error);

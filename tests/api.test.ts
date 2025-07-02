@@ -1,10 +1,29 @@
 import app from "../src/index";
-import { describe, test, expect, beforeAll, afterAll, afterEach } from "bun:test";
-import { clearDatabase, dropAndRecreateSchema } from "../src/db/db";
+import {
+    describe,
+    test,
+    expect,
+    beforeAll,
+    afterAll,
+    afterEach,
+} from "bun:test";
+import {
+    clearDatabase,
+    dropAndRecreateSchema,
+    closeDbConnection,
+} from "../src/db/db";
 
 describe("VideoDanmakuServer API", () => {
     beforeAll(async () => {
         await dropAndRecreateSchema();
+    });
+
+    afterAll(async () => {
+        await closeDbConnection();
+    });
+
+    afterEach(async () => {
+        await clearDatabase();
     });
 
     test("GET /", async () => {
@@ -34,8 +53,8 @@ describe("VideoDanmakuServer API", () => {
             method: "POST",
             body: JSON.stringify({}),
             headers: {
-                'Content-Type': 'application/json'
-            }
+                "Content-Type": "application/json",
+            },
         });
         expect(res.status).toBe(400);
         const json = await res.json();
@@ -73,7 +92,6 @@ describe("VideoDanmakuServer API", () => {
     });
 
     test("GET /getComments - Success", async () => {
-        // First add a comment
         const comment = {
             platform: "youtube",
             videoId: "12345",
@@ -84,7 +102,6 @@ describe("VideoDanmakuServer API", () => {
             scrollMode: "top",
             fontSize: "large",
         };
-
         await app.request("/addComment", {
             method: "POST",
             body: JSON.stringify(comment),
@@ -92,8 +109,6 @@ describe("VideoDanmakuServer API", () => {
                 "Content-Type": "application/json",
             },
         });
-
-        // Then get the comments
         const res = await app.request(
             "/getComments?platform=youtube&videoId=12345"
         );

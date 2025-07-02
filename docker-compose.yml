@@ -1,0 +1,15 @@
+version: '3.8'
+
+services:
+  # Video Danmaku Server
+  danmaku-server:
+    build: .
+    container_name: danmaku-server
+    environment:
+      # Replace with your actual PostgreSQL connection URL
+      DATABASE_URL: ${DATABASE_URL:-postgres://username:password@host:5432/database}
+      NODE_ENV: production
+      PORT: ${PORT:-3000}
+    ports:
+      - "${PORT:-3000}:${PORT:-3000}"
+    restart: unless-stopped

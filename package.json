@@ -8,7 +8,7 @@
     "db:push": "drizzle-kit push",
     "db:studio": "drizzle-kit studio",
     "test:migrate": "bun run src/db/migrate.ts",
-    "test": "NODE_ENV=test bun test"
+    "test": "NODE_ENV=test bun test tests/api.test.ts && NODE_ENV=test bun test tests/rateLimit.test.ts"
   },
   "dependencies": {
     "dotenv": "^17.0.1",

@@ -69,6 +69,63 @@ bun run start --port 8080
 bun run start -P 8080
 ```
 
+You can also set the port using an environment variable:
+```sh
+PORT=8080 bun run start
+```
+
+## Docker Deployment
+
+### Prerequisites for Docker
+
+You need access to a PostgreSQL database. The Docker container will connect to an external PostgreSQL server using the connection URL you provide.
+
+### Using Docker
+```
+
+1. **Build the Docker image:**
+```sh
+docker build -t video-danmaku-server .
+```
+
+2. **Run with default port (3000):**
+```sh
+docker run -d \
+  --name danmaku-server \
+  -p 3000:3000 \
+  -e DATABASE_URL="postgres://myuser:mypass@192.168.1.100:5432/danmaku_db" \
+  -e NODE_ENV=production \
+  video-danmaku-server
+```
+
+3. **Run with custom port (8080):**
+```sh
+docker run -d \
+  --name danmaku-server \
+  -p 8080:8080 \
+  -e DATABASE_URL="postgres://myuser:mypass@192.168.1.100:5432/danmaku_db" \
+  -e NODE_ENV=production \
+  -e PORT=8080 \
+  video-danmaku-server
+```
+
+4. **Run with cloud database (example with AWS RDS):**
+```sh
+docker run -d \
+  --name danmaku-server \
+  -p 5000:5000 \
+  -e DATABASE_URL="postgres://admin:secret123@mydb.xyz.rds.amazonaws.com:5432/production_db" \
+  -e NODE_ENV=production \
+  -e PORT=5000 \
+  video-danmaku-server
+```
+
+### Environment Variables for Docker
+
+- `DATABASE_URL`: PostgreSQL connection string (required)
+- `NODE_ENV`: Set to `production` for production mode
+- `PORT`: Port number (default: 3000)
+
 ## API Endpoints
 
 ### General

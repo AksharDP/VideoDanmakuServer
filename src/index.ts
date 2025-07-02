@@ -1,5 +1,6 @@
 import { Hono } from "hono";
 import { validateOrInitDatabase, getComments, addComment } from "./db/db";
+import { rateLimiter } from "./rateLimit";
 
 const app = new Hono();
 
@@ -11,9 +12,26 @@ app.get("/ping", (c) => {
     return c.json({ status: "ok", timestamp: new Date().toISOString() });
 });
 
+app.get("/rateLimit/status", async (c) => {
+    try {
+        const { ip, username } = c.req.query();
+        const status = rateLimiter.getStatus(ip, username);
+        return c.json({
+            success: true,
+            data: status,
+        });
+    } catch (error) {
+        console.error("Error getting rate limit status:", error);
+        return c.json(
+            { success: false, error: "Failed to get rate limit status" },
+            500
+        );
+    }
+});
+
 app.get("/getComments", async (c) => {
     try {
-        const { platform, videoId } = c.req.query();
+        const { platform, videoId, username } = c.req.query();
 
         if (!platform || !videoId) {
             return c.json(
@@ -25,7 +43,32 @@ app.get("/getComments", async (c) => {
             );
         }
 
+        const clientIP =
+            c.req.header("x-forwarded-for") ||
+            c.req.header("x-real-ip") ||
+            "unknown";
+
+        const rateLimitCheck = await rateLimiter.checkRetrievalRateLimit(
+            clientIP,
+            username
+        );
+        if (!rateLimitCheck.allowed) {
+            return c.json(
+                {
+                    success: false,
+                    error: rateLimitCheck.error,
+                    type: "rate_limit",
+                },
+                429
+            );
+        }
+
         const result = await getComments(platform, videoId);
+
+        if (result.success) {
+            await rateLimiter.recordRetrieval(clientIP, username);
+        }
+
         return c.json(result);
     } catch (error) {
         console.error("Error fetching comments:", error);
@@ -36,7 +79,6 @@ app.get("/getComments", async (c) => {
     }
 });
 
-// Route to add a comment to a video
 app.post("/addComment", async (c) => {
     try {
         const {
@@ -60,6 +102,26 @@ app.post("/addComment", async (c) => {
             );
         }
 
+        const clientIP =
+            c.req.header("x-forwarded-for") ||
+            c.req.header("x-real-ip") ||
+            "unknown";
+
+        const rateLimitCheck = await rateLimiter.checkRateLimit(
+            clientIP,
+            username
+        );
+        if (!rateLimitCheck.allowed) {
+            return c.json(
+                {
+                    success: false,
+                    error: rateLimitCheck.error,
+                    type: "rate_limit",
+                },
+                429
+            );
+        }
+
         const result = await addComment(
             platform,
             videoId,
@@ -70,6 +132,11 @@ app.post("/addComment", async (c) => {
             scrollMode || "slide",
             fontSize || "normal"
         );
+
+        if (result.success) {
+            await rateLimiter.recordComment(clientIP, username);
+        }
+
         return c.json(result);
     } catch (error) {
         console.error("Error adding comment:", error);
@@ -77,57 +144,37 @@ app.post("/addComment", async (c) => {
     }
 });
 
-if (process.env.NODE_ENV !== 'test') {
+if (process.env.NODE_ENV !== "test") {
     validateOrInitDatabase();
 }
 
-// Parse command line arguments for port
 function parsePort() {
     const args = process.argv.slice(2);
     let port = process.env.PORT || 3000;
-    
+
     for (let i = 0; i < args.length; i++) {
-        if ((args[i] === '--port' || args[i] === '-P') && args[i + 1]) {
+        if ((args[i] === "--port" || args[i] === "-P") && args[i + 1]) {
             port = parseInt(args[i + 1], 10);
             if (isNaN(port)) {
-                console.error('Invalid port number provided');
+                console.error("Invalid port number provided");
                 process.exit(1);
             }
             break;
         }
     }
-    
+
     return port;
 }
 
-// Start the server with configurable port
 const port = parsePort();
 
-// Determine what to export and handle server startup
 let serverExport: any;
 
-if (process.env.NODE_ENV === 'production') {
-    // Production mode - start the server directly
-    console.log(`🚀 Production server starting on port ${port}`);
-    
-    Bun.serve({
-        port: port,
-        hostname: "0.0.0.0",
-        fetch: app.fetch,
-    });
-    
-    console.log(`✅ Production server running on http://0.0.0.0:${port} (accessible from internet)`);
-    
-    // Export nothing to prevent Bun from starting another server
-    serverExport = {};
-} else if (process.env.NODE_ENV === 'test') {
-    // Test mode - export the app directly
+if (process.env.NODE_ENV === "test") {
     serverExport = app;
 } else {
-    // Development mode
-    console.log(`🚀 Development server running on http://localhost:${port}`);
     serverExport = {
-        port: port,
+        port,
         fetch: app.fetch,
     };
 }
