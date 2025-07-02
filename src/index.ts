@@ -28,43 +28,15 @@ const app = new Hono();
 // }));
 
 app.get("/signup", (c) => {
-    return c.html(`
-        <h1>Signup Endpoint</h1>
-        <p>This endpoint accepts POST requests with JSON data.</p>
-        <p>Required fields: email, username, password</p>
-        <form method="POST" action="/signup">
-            <div>
-                <label>Email: <input type="email" name="email" required /></label>
-            </div>
-            <div>
-                <label>Username: <input type="text" name="username" required /></label>
-            </div>
-            <div>
-                <label>Password: <input type="password" name="password" required /></label>
-            </div>
-            <button type="submit">Sign Up</button>
-        </form>
-    `);
+    return c.text('This endpoint works! Use the POST method to sign up.', 200, {
+        "Content-Type": "text/plain",
+    });
 });
 
 app.get("/login", (c) => {
-    return c.html(`
-        <h1>Login Endpoint</h1>
-        <p>This endpoint accepts POST requests with JSON data.</p>
-        <p>Required fields: emailOrUsername, password, rememberMe (optional)</p>
-        <form method="POST" action="/login">
-            <div>
-                <label>Email or Username: <input type="text" name="emailOrUsername" required /></label>
-            </div>
-            <div>
-                <label>Password: <input type="password" name="password" required /></label>
-            </div>
-            <div>
-                <label><input type="checkbox" name="rememberMe" /> Remember Me</label>
-            </div>
-            <button type="submit">Login</button>
-        </form>
-    `);
+    return c.text('This endpoint works! Use the POST method to log in.', 200, {
+        "Content-Type": "text/plain",
+    });
 });
 
 app.post("/signup", zValidator("json", signupSchema), async (c) => {
