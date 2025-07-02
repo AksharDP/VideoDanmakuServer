@@ -27,18 +27,6 @@ const app = new Hono();
 //     exposeHeaders: ['Content-Length', 'X-Request-ID'],
 // }));
 
-app.get("/signup", (c) => {
-    return c.text('This endpoint works! Use the POST method to sign up.', 200, {
-        "Content-Type": "text/plain",
-    });
-});
-
-app.get("/login", (c) => {
-    return c.text('This endpoint works! Use the POST method to log in.', 200, {
-        "Content-Type": "text/plain",
-    });
-});
-
 app.post("/signup", zValidator("json", signupSchema), async (c) => {
     try {
         const body = c.req.valid("json");
