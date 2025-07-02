@@ -41,6 +41,34 @@ bun run db:generate
 bun run db:push
 ```
 
+### Development
+
+To run in development mode with hot reload:
+```sh
+bun run dev
+```
+
+To run in development mode on a specific port:
+```sh
+bun run dev --port 8080
+# or
+bun run dev -P 8080
+```
+
+### Production
+
+To run the server in production mode:
+```sh
+bun run start
+```
+
+To run the server in production mode on a specific port:
+```sh
+bun run start --port 8080
+# or
+bun run start -P 8080
+```
+
 ## API Endpoints
 
 ### General
