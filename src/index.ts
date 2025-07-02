@@ -108,14 +108,15 @@ let serverExport: any;
 
 if (process.env.NODE_ENV === 'production') {
     // Production mode - start the server directly
-    console.log(`🚀 Production server starting on http://localhost:${port}`);
+    console.log(`🚀 Production server starting on port ${port}`);
     
     Bun.serve({
         port: port,
+        hostname: "0.0.0.0",
         fetch: app.fetch,
     });
     
-    console.log(`✅ Production server running on http://localhost:${port}`);
+    console.log(`✅ Production server running on http://0.0.0.0:${port} (accessible from internet)`);
     
     // Export nothing to prevent Bun from starting another server
     serverExport = {};
