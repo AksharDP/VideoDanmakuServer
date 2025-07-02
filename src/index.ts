@@ -12,24 +12,34 @@ import {
     loginSchema,
 } from "./auth/auth";
 import sanitizeHtml from "sanitize-html";
+import { cors as honoCors } from 'hono/cors';
 
 const app = new Hono();
 
-const authRoutes = new Hono();
+app.use('/*', honoCors({
+    origin: [
+        'https://www.youtube.com',
+        'https://youtube.com'
+    ],
+    allowMethods: ['GET', 'POST'],
+    allowHeaders: ['Content-Type', 'Authorization', 'X-Forwarded-For', 'X-Real-IP'],
+    credentials: true,
+    exposeHeaders: ['Content-Length', 'X-Request-ID'],
+}));
 
-authRoutes.post("/signup", zValidator("json", signupSchema), async (c) => {
+app.post("/signup", zValidator("json", signupSchema), async (c) => {
     const body = c.req.valid("json");
     const result = await signupUser(body);
     return c.json(result, result.status as any);
 });
 
-authRoutes.post("/login", zValidator("json", loginSchema), async (c) => {
+app.post("/login", zValidator("json", loginSchema), async (c) => {
     const body = c.req.valid("json");
     const result = await loginUser(body);
     return c.json(result, result.status as any);
 });
 
-authRoutes.post("/forgot-password", async (c) => {
+app.post("/forgot-password", async (c) => {
     const result = await forgotPassword();
     return c.json(result);
 });
@@ -225,3 +235,4 @@ if (process.env.NODE_ENV === "test") {
 }
 
 export default serverExport;
+
