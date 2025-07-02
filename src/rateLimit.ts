@@ -17,12 +17,16 @@ class RateLimiter {
     private userLimits: Map<string, RateLimitEntry> = new Map();
     private userIPMappings: Map<string, UserIPMapping> = new Map();
 
-    private readonly DAILY_LIMIT = 100;
-    private readonly COMMENT_INTERVAL = 5000;
-    private readonly RETRIEVAL_INTERVAL = 1000;
+    private readonly DAILY_LIMIT: number;
+    private readonly COMMENT_INTERVAL: number;
+    private readonly RETRIEVAL_INTERVAL: number;
     private readonly DAY_IN_MS = 24 * 60 * 60 * 1000;
 
     constructor() {
+        this.DAILY_LIMIT = Number(process.env.DAILY_LIMIT) || 100;
+        this.COMMENT_INTERVAL = Number(process.env.COMMENT_INTERVAL) || 5000;
+        this.RETRIEVAL_INTERVAL = Number(process.env.RETRIEVAL_INTERVAL) || 1000;
+
         setInterval(() => this.cleanup(), 60 * 60 * 1000);
     }
 

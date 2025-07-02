@@ -25,6 +25,9 @@ USER bunjs
 ENV NODE_ENV=production
 ENV PORT=3000
 ENV DATABASE_URL=""
+ENV DAILY_LIMIT=""
+ENV COMMENT_INTERVAL=""
+ENV RETRIEVAL_INTERVAL=""
 
 # Expose the default port (this is just documentation, actual port is dynamic)
 EXPOSE $PORT

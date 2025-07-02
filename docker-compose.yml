@@ -10,6 +10,9 @@ services:
       DATABASE_URL: ${DATABASE_URL:-postgres://username:password@host:5432/database}
       NODE_ENV: production
       PORT: ${PORT:-3000}
+      DAILY_LIMIT: ${DAILY_LIMIT:-100}
+      COMMENT_INTERVAL: ${COMMENT_INTERVAL:-5000}
+      RETRIEVAL_INTERVAL: ${RETRIEVAL_INTERVAL:-1000}
     ports:
       - "${PORT:-3000}:${PORT:-3000}"
     restart: unless-stopped
