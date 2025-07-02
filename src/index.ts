@@ -1,11 +1,18 @@
 import { Hono } from "hono";
 import { validateOrInitDatabase, getComments, addComment } from "./db/db";
 import { rateLimiter } from "./rateLimit";
+import packageJson from "../package.json";
+
+
 
 const app = new Hono();
 
 app.get("/", (c) => {
-    return c.text("VideoDanmakuServer is running!");
+    // return c.text("VideoDanmakuServer is running!");
+    return c.json({
+        message: "VideoDanmakuServer is running!",
+        version: packageJson.version,
+    });
 });
 
 app.get("/ping", (c) => {
