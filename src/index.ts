@@ -1,12 +1,41 @@
 import { Hono } from "hono";
+import { zValidator } from "@hono/zod-validator";
 import { validateOrInitDatabase, getComments, addComment } from "./db/db";
 import { rateLimiter } from "./rateLimit";
 import packageJson from "../package.json";
+import {
+    signupUser,
+    loginUser,
+    forgotPassword,
+    authMiddleware,
+    signupSchema,
+    loginSchema,
+} from "./auth/auth";
+import sanitizeHtml from "sanitize-html";
 
 const app = new Hono();
 
+const authRoutes = new Hono();
+
+authRoutes.post("/signup", zValidator("json", signupSchema), async (c) => {
+    const body = c.req.valid("json");
+    const result = await signupUser(body);
+    return c.json(result, result.status as any);
+});
+
+authRoutes.post("/login", zValidator("json", loginSchema), async (c) => {
+    const body = c.req.valid("json");
+    const result = await loginUser(body);
+    return c.json(result, result.status as any);
+});
+
+authRoutes.post("/forgot-password", async (c) => {
+    const result = await forgotPassword();
+    return c.json(result);
+});
+
+
 app.get("/", (c) => {
-    // return c.text("VideoDanmakuServer is running!");
     return c.json({
         message: "VideoDanmakuServer is running!",
         version: packageJson.version,
@@ -17,22 +46,6 @@ app.get("/ping", (c) => {
     return c.json({ status: "ok", timestamp: new Date().toISOString() });
 });
 
-// app.get("/rateLimit/status", async (c) => {
-//     try {
-//         const { ip, username } = c.req.query();
-//         const status = rateLimiter.getStatus(ip, username);
-//         return c.json({
-//             success: true,
-//             data: status,
-//         });
-//     } catch (error) {
-//         console.error("Error getting rate limit status:", error);
-//         return c.json(
-//             { success: false, error: "Failed to get rate limit status" },
-//             500
-//         );
-//     }
-// });
 
 app.get("/getComments", async (c) => {
     try {
@@ -48,6 +61,18 @@ app.get("/getComments", async (c) => {
             );
         }
 
+        const sanitizedPlatform = sanitizeHtml(platform, {
+            allowedTags: [],
+            allowedAttributes: {},
+        });
+        const sanitizedVideoId = sanitizeHtml(videoId, {
+            allowedTags: [],
+            allowedAttributes: {},
+        });
+        const sanitizedUsername = username
+            ? sanitizeHtml(username, { allowedTags: [], allowedAttributes: {} })
+            : undefined;
+
         const clientIP =
             c.req.header("x-forwarded-for") ||
             c.req.header("x-real-ip") ||
@@ -55,7 +80,7 @@ app.get("/getComments", async (c) => {
 
         const rateLimitCheck = await rateLimiter.checkRetrievalRateLimit(
             clientIP,
-            username
+            sanitizedUsername
         );
         if (!rateLimitCheck.allowed) {
             return c.json(
@@ -68,10 +93,10 @@ app.get("/getComments", async (c) => {
             );
         }
 
-        const result = await getComments(platform, videoId);
+        const result = await getComments(sanitizedPlatform, sanitizedVideoId);
 
         if (result.success) {
-            await rateLimiter.recordRetrieval(clientIP, username);
+            await rateLimiter.recordRetrieval(clientIP, sanitizedUsername);
         }
 
         return c.json(result);
@@ -84,28 +109,43 @@ app.get("/getComments", async (c) => {
     }
 });
 
-app.post("/addComment", async (c) => {
+app.post("/addComment", authMiddleware, async (c) => {
     try {
-        const {
-            platform,
-            videoId,
-            time,
-            text,
-            username,
-            color,
-            scrollMode,
-            fontSize,
-        } = await c.req.json();
+        const user = c.get("user");
+        const { platform, videoId, time, text, color, scrollMode, fontSize } =
+            await c.req.json();
 
-        if (!platform || !videoId || time === undefined || !text || !username) {
+        if (!platform || !videoId || time === undefined || !text) {
             return c.json(
                 {
                     success: false,
-                    error: "Missing required fields: platform, videoId, time, text, username",
+                    error: "Missing required fields: platform, videoId, time, text",
                 },
                 400
             );
         }
+
+        const sanitizedPlatform = sanitizeHtml(platform, {
+            allowedTags: [],
+            allowedAttributes: {},
+        });
+        const sanitizedVideoId = sanitizeHtml(videoId, {
+            allowedTags: [],
+            allowedAttributes: {},
+        });
+        const sanitizedText = sanitizeHtml(text);
+        const sanitizedColor = color
+            ? sanitizeHtml(color, { allowedTags: [], allowedAttributes: {} })
+            : "#ffffff";
+        const sanitizedScrollMode = scrollMode
+            ? sanitizeHtml(scrollMode, {
+                  allowedTags: [],
+                  allowedAttributes: {},
+              })
+            : "slide";
+        const sanitizedFontSize = fontSize
+            ? sanitizeHtml(fontSize, { allowedTags: [], allowedAttributes: {} })
+            : "normal";
 
         const clientIP =
             c.req.header("x-forwarded-for") ||
@@ -114,7 +154,7 @@ app.post("/addComment", async (c) => {
 
         const rateLimitCheck = await rateLimiter.checkRateLimit(
             clientIP,
-            username
+            user.username
         );
         if (!rateLimitCheck.allowed) {
             return c.json(
@@ -128,18 +168,18 @@ app.post("/addComment", async (c) => {
         }
 
         const result = await addComment(
-            platform,
-            videoId,
+            sanitizedPlatform,
+            sanitizedVideoId,
             Number(time),
-            text,
-            color || "#ffffff",
-            username,
-            scrollMode || "slide",
-            fontSize || "normal"
+            sanitizedText,
+            sanitizedColor,
+            user.id,
+            sanitizedScrollMode as any,
+            sanitizedFontSize as any
         );
 
         if (result.success) {
-            await rateLimiter.recordComment(clientIP, username);
+            await rateLimiter.recordComment(clientIP, user.username);
         }
 
         return c.json(result);

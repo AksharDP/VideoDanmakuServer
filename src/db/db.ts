@@ -141,21 +141,11 @@ export async function addComment(
     time: number,
     text: string,
     color: string,
-    username: string,
+    userId: number,
     scrollMode: "slide" | "top" | "bottom",
     fontSize: "small" | "normal" | "large"
 ): Promise<{ success: boolean; comment?: any; error?: string }> {
     try {
-        const user = await db
-            .insert(schema.users)
-            .values({ platform, username })
-            .onConflictDoUpdate({
-                target: [schema.users.platform, schema.users.username],
-                set: { username },
-            })
-            .returning()
-            .then((res) => res[0]);
-
         const video = await db
             .insert(schema.videos)
             .values({ platform, videoId })
@@ -171,7 +161,7 @@ export async function addComment(
             .values({
                 content: text,
                 time,
-                userId: user.id,
+                userId: userId,
                 videoId: video.id,
                 scrollMode,
                 color,

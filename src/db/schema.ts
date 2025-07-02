@@ -7,6 +7,7 @@ import {
     unique,
     index,
     pgEnum,
+    text,
 } from "drizzle-orm/pg-core";
 import { relations } from "drizzle-orm";
 
@@ -21,23 +22,41 @@ export const fontSizeEnum = pgEnum("font_size_enum", [
     "large",
 ]);
 
-// --- TABLES ---
 export const users = pgTable(
     "users",
     {
         id: serial("id").primaryKey(),
-        platform: varchar("platform", { length: 63 }).notNull(),
-        username: varchar("username", { length: 255 }).notNull(),
+        username: varchar("username", { length: 32 }).notNull(),
+        email: varchar("email", { length: 254 }).notNull(),
+        password: varchar("password", { length: 64 }).notNull(),
         createdAt: timestamp("created_at").defaultNow().notNull(),
     },
-    (table) => [unique("platform_username").on(table.platform, table.username)]
+    (table) => [
+        unique("username_idx").on(table.username),
+        unique("email_idx").on(table.email),
+    ]
+);
+
+export const authTokens = pgTable(
+    "auth_tokens",
+    {
+        id: serial("id").primaryKey(),
+        userId: integer("user_id")
+            .notNull()
+            .references(() => users.id, { onDelete: "cascade" }),
+        token: text("token").notNull(),
+        createdAt: timestamp("created_at").defaultNow().notNull(),
+        expiresAt: timestamp("expires_at"),
+        lastUsedAt: timestamp("last_used_at").defaultNow().notNull(),
+    },
+    (table) => [unique("user_token").on(table.userId, table.token)]
 );
 
 export const videos = pgTable(
     "videos",
     {
         id: serial("id").primaryKey(),
-        platform: varchar("platform", { length: 63 }).notNull(), // e.g., "youtube", "crunchyroll", "vimeo"
+        platform: varchar("platform", { length: 63 }).notNull(),
         videoId: varchar("video_id", { length: 255 }).notNull(),
     },
     (table) => [unique("platform_videoId").on(table.platform, table.videoId)]
@@ -48,7 +67,7 @@ export const comments = pgTable(
     {
         id: serial("id").primaryKey(),
         content: varchar("content", { length: 350 }).notNull(),
-        time: integer("time").notNull(), // Video timestamp in seconds
+        time: integer("time").notNull(),
         userId: integer("user_id")
             .notNull()
             .references(() => users.id, { onDelete: "cascade" }),
@@ -56,14 +75,16 @@ export const comments = pgTable(
             .notNull()
             .references(() => videos.id, { onDelete: "cascade" }),
         scrollMode: scrollModeEnum("scroll_mode").default("slide").notNull(),
-        color: varchar("color", { length: 15 }), // e.g., "#ff0000" for red, iridescent, neon, pastel, default null is white
+        color: varchar("color", { length: 15 }),
         fontSize: fontSizeEnum("font_size").default("normal").notNull(),
         createdAt: timestamp("created_at").defaultNow().notNull(),
     },
-    (table) => [index("user_comments_idx").on(table.userId)]
+    (table) => [
+        index("user_comments_idx").on(table.userId),
+        index("video_comments_idx").on(table.videoId),
+    ]
 );
 
-// --- RELATIONS ---
 
 export const usersRelations = relations(users, ({ many }) => ({
     comments: many(comments),
