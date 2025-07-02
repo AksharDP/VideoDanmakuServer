@@ -41,13 +41,6 @@ bun run db:generate
 bun run db:push
 ```
 
-### Development
-
-To run in development mode with hot reload:
-```sh
-bun run dev
-```
-
 ## API Endpoints
 
 ### General
