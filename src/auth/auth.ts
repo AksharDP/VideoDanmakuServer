@@ -131,6 +131,10 @@ export async function authMiddleware(c: Context, next: Next) {
     }
 
     const token = authHeader.substring(7);
+    
+    if (!token || token.trim() === "") {
+        return c.json({ error: "Unauthorized" }, 401);
+    }
 
     try {
         const decodedPayload = await verify(token, secret);
@@ -177,7 +181,20 @@ export async function authMiddleware(c: Context, next: Next) {
         }
 
         c.set("user", user);
-    } catch (error) {
+    } catch (error: any) {
+        // Only log unexpected errors, not expected JWT validation failures
+        const isExpectedJwtError = error.name === "JwtTokenExpired" || 
+                                 error.name === "JwtTokenInvalid" || 
+                                 error.name === "JwtAlgorithmNotImplemented" ||
+                                 error.name === "JwtTokenNotBefore";
+        
+        if (!isExpectedJwtError && process.env.NODE_ENV !== "test") {
+            console.log("Unexpected auth error:", error);
+        }
+        
+        if (error.name === "JwtTokenExpired") {
+            return c.json({ error: "Token expired" }, 401);
+        }
         return c.json({ error: "Invalid token" }, 401);
     }
 

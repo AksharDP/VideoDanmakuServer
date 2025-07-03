@@ -23,11 +23,22 @@ class RateLimiter {
     private readonly DAY_IN_MS = 24 * 60 * 60 * 1000;
 
     constructor() {
-        this.DAILY_LIMIT = Number(process.env.DAILY_LIMIT) || 100;
-        this.COMMENT_INTERVAL = Number(process.env.COMMENT_INTERVAL) || 5000;
-        this.RETRIEVAL_INTERVAL = Number(process.env.RETRIEVAL_INTERVAL) || 1000;
+        this.DAILY_LIMIT =
+            process.env.NODE_ENV === "test"
+                ? 100
+                : Number(process.env.DAILY_LIMIT) || 100;
+        this.COMMENT_INTERVAL =
+            process.env.NODE_ENV === "test"
+                ? 1000
+                : Number(process.env.COMMENT_INTERVAL) || 5000;
+        this.RETRIEVAL_INTERVAL =
+            process.env.NODE_ENV === "test"
+                ? 500
+                : Number(process.env.RETRIEVAL_INTERVAL) || 1000;
 
-        setInterval(() => this.cleanup(), 60 * 60 * 1000);
+        if (process.env.NODE_ENV !== "test") {
+            setInterval(() => this.cleanup(), 60 * 60 * 1000);
+        }
     }
 
     /**

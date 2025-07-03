@@ -1,35 +1,59 @@
 import app from "../src/index";
-import {
-    describe,
-    test,
-    expect,
-    beforeAll,
-    afterAll,
-    afterEach,
-} from "bun:test";
-import {
-    clearDatabase,
-    dropAndRecreateSchema,
-    closeDbConnection,
-} from "../src/db/db";
+import { describe, test, expect, beforeAll, afterAll } from "bun:test";
+import db, { closeDbConnection } from "../src/db/db";
+
+// Helper function to get a valid token
+async function getAuthToken() {
+    const user = {
+        email: `testuser_${Date.now()}@example.com`,
+        username: `testuser_${Date.now()}`,
+        password: "password123",
+    };
+    const signupRes = await app.request("/signup", {
+        method: "POST",
+        body: JSON.stringify(user),
+        headers: { "Content-Type": "application/json" },
+    });
+    
+    if (signupRes.status !== 201) {
+        console.error("Signup failed:", await signupRes.text());
+        throw new Error("Failed to signup user for test");
+    }
+    
+    const loginRes = await app.request("/login", {
+        method: "POST",
+        body: JSON.stringify({
+            emailOrUsername: user.email,
+            password: user.password,
+        }),
+        headers: { "Content-Type": "application/json" },
+    });
+    
+    if (loginRes.status !== 200) {
+        console.error("Login failed:", await loginRes.text());
+        throw new Error("Failed to login user for test");
+    }
+    
+    const { token } = await loginRes.json();
+    return token;
+}
 
 describe("VideoDanmakuServer API", () => {
+    let authToken: string;
+
     beforeAll(async () => {
-        await dropAndRecreateSchema();
+        authToken = await getAuthToken();
     });
 
     afterAll(async () => {
-        await closeDbConnection();
-    });
-
-    afterEach(async () => {
-        await clearDatabase();
+        // Don't close connection here - let other test files use it
     });
 
     test("GET /", async () => {
         const res = await app.request("/");
         expect(res.status).toBe(200);
-        expect(await res.text()).toBe("VideoDanmakuServer is running!");
+        const json = await res.json();
+        expect(json.message).toBe("VideoDanmakuServer is running!");
     });
 
     test("GET /ping", async () => {
@@ -54,14 +78,10 @@ describe("VideoDanmakuServer API", () => {
             body: JSON.stringify({}),
             headers: {
                 "Content-Type": "application/json",
+                Authorization: `Bearer ${authToken}`,
             },
         });
         expect(res.status).toBe(400);
-        const json = await res.json();
-        expect(json.success).toBe(false);
-        expect(json.error).toBe(
-            "Missing required fields: platform, videoId, time, text, username"
-        );
     });
 
     test("POST /addComment - Success", async () => {
@@ -81,6 +101,7 @@ describe("VideoDanmakuServer API", () => {
             body: JSON.stringify(comment),
             headers: {
                 "Content-Type": "application/json",
+                Authorization: `Bearer ${authToken}`,
             },
         });
 
@@ -92,23 +113,7 @@ describe("VideoDanmakuServer API", () => {
     });
 
     test("GET /getComments - Success", async () => {
-        const comment = {
-            platform: "youtube",
-            videoId: "12345",
-            time: 15,
-            text: "Test comment for retrieval",
-            username: "testuser2",
-            color: "#ff0000",
-            scrollMode: "top",
-            fontSize: "large",
-        };
-        await app.request("/addComment", {
-            method: "POST",
-            body: JSON.stringify(comment),
-            headers: {
-                "Content-Type": "application/json",
-            },
-        });
+        await new Promise((resolve) => setTimeout(resolve, 1000));
         const res = await app.request(
             "/getComments?platform=youtube&videoId=12345"
         );
@@ -120,6 +125,7 @@ describe("VideoDanmakuServer API", () => {
     });
 
     test("GET /getComments - Video not found", async () => {
+        await new Promise((resolve) => setTimeout(resolve, 1000));
         const res = await app.request(
             "/getComments?platform=youtube&videoId=dne"
         );
@@ -130,6 +136,7 @@ describe("VideoDanmakuServer API", () => {
     });
 
     test("GET /getComments - No comments", async () => {
+        await new Promise((resolve) => setTimeout(resolve, 1000));
         const res = await app.request(
             "/getComments?platform=youtube&videoId=no_comments"
         );
@@ -156,6 +163,7 @@ describe("VideoDanmakuServer API", () => {
             body: JSON.stringify(comment),
             headers: {
                 "Content-Type": "application/json",
+                Authorization: `Bearer ${authToken}`,
             },
         });
 

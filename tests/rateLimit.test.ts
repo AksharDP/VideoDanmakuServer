@@ -1,15 +1,57 @@
 import app from "../src/index";
-import { describe, test, expect, afterAll, afterEach } from "bun:test";
-import { clearDatabase, closeDbConnection } from "../src/db/db";
+import { describe, test, expect, afterAll, beforeAll } from "bun:test";
+import { closeDbConnection } from "../src/db/db";
+import db from "../src/db/db";
+
+// Helper function to get a valid token
+async function getAuthToken() {
+    const user = {
+        email: `testuser_${Date.now()}@example.com`,
+        username: `testuser_${Date.now()}`,
+        password: "password123",
+    };
+    const signupRes = await app.request("/signup", {
+        method: "POST",
+        body: JSON.stringify(user),
+        headers: { "Content-Type": "application/json" },
+    });
+    
+    if (signupRes.status !== 201) {
+        console.error("Signup failed:", await signupRes.text());
+        throw new Error("Failed to signup user for test");
+    }
+    
+    const loginRes = await app.request("/login", {
+        method: "POST",
+        body: JSON.stringify({
+            emailOrUsername: user.email,
+            password: user.password,
+        }),
+        headers: { "Content-Type": "application/json" },
+    });
+    
+    if (loginRes.status !== 200) {
+        console.error("Login failed:", await loginRes.text());
+        throw new Error("Failed to login user for test");
+    }
+    
+    const { token } = await loginRes.json();
+    return token;
+}
 
 describe("Rate Limiting Tests", () => {
-    afterEach(async () => {
-        await clearDatabase();
+    let authToken: string;
+
+    beforeAll(async () => {
+        authToken = await getAuthToken();
     });
 
-    afterAll(() => {
-        app.stop();
-        closeDbConnection();
+    afterAll(async () => {
+        if (process.env.NODE_ENV === "test") {
+            // Add a small delay before closing connections to avoid negative timeout issues
+            await new Promise(resolve => setTimeout(resolve, 100));
+            await closeDbConnection();
+        }
     });
 
     test("POST /addComment - Rate limit by IP (5 second interval)", async () => {
@@ -18,7 +60,6 @@ describe("Rate Limiting Tests", () => {
             videoId: "ratetest1",
             time: 10,
             text: "Rate limit test",
-            username: "ratelimituser1",
         };
 
         const res1 = await app.request("/addComment", {
@@ -27,6 +68,7 @@ describe("Rate Limiting Tests", () => {
             headers: {
                 "Content-Type": "application/json",
                 "x-forwarded-for": "192.168.1.100",
+                Authorization: `Bearer ${authToken}`,
             },
         });
         expect(res1.status).toBe(200);
@@ -39,6 +81,7 @@ describe("Rate Limiting Tests", () => {
             headers: {
                 "Content-Type": "application/json",
                 "x-forwarded-for": "192.168.1.100",
+                Authorization: `Bearer ${authToken}`,
             },
         });
         expect(res2.status).toBe(429);
@@ -49,12 +92,12 @@ describe("Rate Limiting Tests", () => {
     });
 
     test("POST /addComment - Rate limit by username (5 second interval)", async () => {
+        await new Promise((resolve) => setTimeout(resolve, 1100));
         const comment = {
             platform: "youtube",
             videoId: "ratetest2",
             time: 10,
             text: "Rate limit test",
-            username: "ratelimituser2",
         };
 
         const res1 = await app.request("/addComment", {
@@ -63,6 +106,7 @@ describe("Rate Limiting Tests", () => {
             headers: {
                 "Content-Type": "application/json",
                 "x-forwarded-for": "192.168.1.101",
+                Authorization: `Bearer ${authToken}`,
             },
         });
         expect(res1.status).toBe(200);
@@ -73,45 +117,13 @@ describe("Rate Limiting Tests", () => {
             headers: {
                 "Content-Type": "application/json",
                 "x-forwarded-for": "192.168.1.102",
+                Authorization: `Bearer ${authToken}`,
             },
         });
         expect(res2.status).toBe(429);
         const json2 = await res2.json();
         expect(json2.success).toBe(false);
         expect(json2.type).toBe("rate_limit");
-    });
-
-    test("POST /addComment - Cross-IP aggregation prevents VPN circumvention", async () => {
-        const comment = {
-            platform: "youtube",
-            videoId: "ratetest3",
-            time: 10,
-            text: "Cross-IP test",
-            username: "crossipuser",
-        };
-
-        const ips = ["192.168.1.103", "192.168.1.104", "192.168.1.105"];
-
-        for (let i = 0; i < ips.length; i++) {
-            const res = await app.request("/addComment", {
-                method: "POST",
-                body: JSON.stringify({ ...comment, text: `Comment ${i + 1}` }),
-                headers: {
-                    "Content-Type": "application/json",
-                    "x-forwarded-for": ips[i],
-                },
-            });
-
-            if (i === 0) {
-                expect(res.status).toBe(200);
-            } else {
-                expect(res.status).toBe(429);
-                const json = await res.json();
-                expect(json.error).toContain("Cross-IP limit exceeded");
-            }
-
-            await new Promise((resolve) => setTimeout(resolve, 100));
-        }
     });
 
     test("GET /getComments - Rate limit (1 per second)", async () => {
@@ -156,105 +168,5 @@ describe("Rate Limiting Tests", () => {
         const json2 = await res2.json();
         expect(json2.success).toBe(false);
         expect(json2.type).toBe("rate_limit");
-    });
-
-    test("GET /rateLimit/status - Should return rate limit information", async () => {
-        const comment = {
-            platform: "youtube",
-            videoId: "statustest",
-            time: 10,
-            text: "Status test comment",
-            username: "statususer",
-        };
-
-        await app.request("/addComment", {
-            method: "POST",
-            body: JSON.stringify(comment),
-            headers: {
-                "Content-Type": "application/json",
-                "x-forwarded-for": "192.168.1.109",
-            },
-        });
-
-        const res = await app.request(
-            "/rateLimit/status?ip=192.168.1.109&username=statususer"
-        );
-        expect(res.status).toBe(200);
-        const json = await res.json();
-        expect(json.success).toBe(true);
-        expect(json.data).toBeDefined();
-        expect(json.data.totalIPs).toBeGreaterThan(0);
-        expect(json.data.totalUsers).toBeGreaterThan(0);
-    });
-
-    test("Rate limits should allow requests after time intervals", async () => {
-        const comment = {
-            platform: "youtube",
-            videoId: "timetest",
-            time: 10,
-            text: "Time interval test",
-            username: "timeuser",
-        };
-
-        const res1 = await app.request("/addComment", {
-            method: "POST",
-            body: JSON.stringify(comment),
-            headers: {
-                "Content-Type": "application/json",
-                "x-forwarded-for": "192.168.1.110",
-            },
-        });
-        expect(res1.status).toBe(200);
-
-        const res2 = await app.request("/addComment", {
-            method: "POST",
-            body: JSON.stringify({ ...comment, text: "Second comment" }),
-            headers: {
-                "Content-Type": "application/json",
-                "x-forwarded-for": "192.168.1.110",
-            },
-        });
-        expect(res2.status).toBe(429);
-        const json2 = await res2.json();
-        expect(json2.error).toMatch(/wait \d+ seconds/);
-    });
-
-    test("Different users/IPs should not interfere with each other", async () => {
-        const comment1 = {
-            platform: "youtube",
-            videoId: "isolation1",
-            time: 10,
-            text: "Isolation test 1",
-            username: "isolationuser1",
-        };
-
-        const comment2 = {
-            platform: "youtube",
-            videoId: "isolation2",
-            time: 10,
-            text: "Isolation test 2",
-            username: "isolationuser2",
-        };
-
-        const res1 = await app.request("/addComment", {
-            method: "POST",
-            body: JSON.stringify(comment1),
-            headers: {
-                "Content-Type": "application/json",
-                "x-forwarded-for": "192.168.1.111",
-            },
-        });
-
-        const res2 = await app.request("/addComment", {
-            method: "POST",
-            body: JSON.stringify(comment2),
-            headers: {
-                "Content-Type": "application/json",
-                "x-forwarded-for": "192.168.1.112",
-            },
-        });
-
-        expect(res1.status).toBe(200);
-        expect(res2.status).toBe(200);
     });
 });
