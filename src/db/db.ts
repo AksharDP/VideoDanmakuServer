@@ -3,6 +3,7 @@ import { drizzle } from "drizzle-orm/postgres-js";
 import { migrate } from "drizzle-orm/postgres-js/migrator";
 import path from "path";
 import * as schema from "./schema";
+import { z } from "zod";
 
 const postgres = require("postgres").default;
 let connectionString = process.env.DATABASE_URL;
@@ -89,6 +90,21 @@ export async function getComments(
     }
 }
 
+
+// Zod schema for comment validation
+export const addCommentSchema = z.object({
+    platform: z.string().min(1).max(63),
+    videoId: z.string().min(1).max(255),
+    time: z.number().int().min(0),
+    text: z.string().min(1).max(350),
+    color: z.string().max(15),
+    userId: z.number().int().min(1),
+    scrollMode: z.enum(["slide", "top", "bottom"]),
+    fontSize: z.enum(["small", "normal", "large"]),
+});
+
+export type AddCommentInput = z.infer<typeof addCommentSchema>;
+
 export async function addComment(
     platform: string,
     videoId: string,
@@ -98,7 +114,36 @@ export async function addComment(
     userId: number,
     scrollMode: "slide" | "top" | "bottom",
     fontSize: "small" | "normal" | "large"
-): Promise<{ success: boolean; comment?: any; error?: string }> {
+): Promise<{ success: boolean; comment?: any; error?: string; code?: string }> {
+    // Use zod for validation
+    const parseResult = addCommentSchema.safeParse({
+        platform,
+        videoId,
+        time,
+        text,
+        color,
+        userId,
+        scrollMode,
+        fontSize,
+    });
+    if (!parseResult.success) {
+        // Find the first error and return a readable message
+        const firstError = parseResult.error.errors[0];
+        let code = "invalid_comment";
+        if (firstError.path[0] === "platform") code = "invalid_platform";
+        if (firstError.path[0] === "videoId") code = "invalid_videoId";
+        if (firstError.path[0] === "text") code = firstError.message.includes("max") ? "comment_too_long" : "invalid_text";
+        if (firstError.path[0] === "color") code = "invalid_color";
+        if (firstError.path[0] === "time") code = "invalid_time";
+        if (firstError.path[0] === "scrollMode") code = "invalid_scrollMode";
+        if (firstError.path[0] === "fontSize") code = "invalid_fontSize";
+        return {
+            success: false,
+            error: firstError.message,
+            code,
+        };
+    }
+
     try {
         const video = await db
             .insert(schema.videos)

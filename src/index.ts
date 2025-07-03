@@ -149,6 +149,8 @@ app.post("/addComment", authMiddleware, async (c) => {
         const { platform, videoId, time, text, color, scrollMode, fontSize } =
             await c.req.json();
 
+
+        // Check for required fields (basic presence)
         if (!platform || !videoId || time === undefined || !text) {
             return c.json(
                 {
