@@ -495,6 +495,19 @@ class RateLimiter {
 
         return status;
     }
+
+    /**
+     * Reset all rate limiting data - for test use only
+     */
+    resetForTests() {
+        if (process.env.NODE_ENV !== "test") {
+            throw new Error("resetForTests() can only be called in test environment");
+        }
+        
+        this.ipLimits.clear();
+        this.userLimits.clear();
+        this.userIPMappings.clear();
+    }
 }
 
 const rateLimiter = new RateLimiter();

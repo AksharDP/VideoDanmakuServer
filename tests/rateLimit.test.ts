@@ -1,52 +1,18 @@
 import app from "../src/index";
-import { describe, test, expect, afterAll, beforeAll } from "bun:test";
+import { describe, test, expect, afterAll, beforeAll, afterEach } from "bun:test";
 import { closeDbConnection } from "../src/db/db";
 import db from "../src/db/db";
-
-// Helper function to get a valid token
-async function getAuthToken() {
-    const user = {
-        email: `testuser_${Date.now()}@example.com`,
-        username: `testuser_${Date.now()}`,
-        password: "password123",
-    };
-    const signupRes = await app.request("/signup", {
-        method: "POST",
-        body: JSON.stringify(user),
-        headers: { "Content-Type": "application/json" },
-    });
-    
-    if (signupRes.status !== 201) {
-        console.error("Signup failed:", await signupRes.text());
-        throw new Error("Failed to signup user for test");
-    }
-    
-    const loginRes = await app.request("/login", {
-        method: "POST",
-        body: JSON.stringify({
-            emailOrUsername: user.email,
-            password: user.password,
-        }),
-        headers: { "Content-Type": "application/json" },
-    });
-    
-    if (loginRes.status !== 200) {
-        console.error("Login failed:", await loginRes.text());
-        throw new Error("Failed to login user for test");
-    }
-    
-    const { token } = await loginRes.json();
-    return token;
-}
+import { 
+    cleanupDatabase, 
+    createTestUserWithToken, 
+    createTestComment,
+    TestUser 
+} from "./testUtils";
 
 describe("Rate Limiting Tests", () => {
-    let authToken: string;
-
-    beforeAll(async () => {
-        authToken = await getAuthToken();
-    });
-
+    // Only cleanup at the end to avoid database connection issues
     afterAll(async () => {
+        await cleanupDatabase();
         if (process.env.NODE_ENV === "test") {
             // Add a small delay before closing connections to avoid negative timeout issues
             await new Promise(resolve => setTimeout(resolve, 100));
@@ -55,9 +21,11 @@ describe("Rate Limiting Tests", () => {
     });
 
     test("POST /addComment - Rate limit by IP (5 second interval)", async () => {
+        const { token } = await createTestUserWithToken();
+        
         const comment = {
             platform: "youtube",
-            videoId: "ratetest1",
+            videoId: `ratetest1_${Date.now()}_${Math.random().toString(36).substring(7)}`,
             time: 10,
             text: "Rate limit test",
         };
@@ -68,7 +36,7 @@ describe("Rate Limiting Tests", () => {
             headers: {
                 "Content-Type": "application/json",
                 "x-forwarded-for": "192.168.1.100",
-                Authorization: `Bearer ${authToken}`,
+                Authorization: `Bearer ${token}`,
             },
         });
         expect(res1.status).toBe(200);
@@ -81,7 +49,7 @@ describe("Rate Limiting Tests", () => {
             headers: {
                 "Content-Type": "application/json",
                 "x-forwarded-for": "192.168.1.100",
-                Authorization: `Bearer ${authToken}`,
+                Authorization: `Bearer ${token}`,
             },
         });
         expect(res2.status).toBe(429);
@@ -92,10 +60,12 @@ describe("Rate Limiting Tests", () => {
     });
 
     test("POST /addComment - Rate limit by username (5 second interval)", async () => {
+        const { token } = await createTestUserWithToken();
+        
         await new Promise((resolve) => setTimeout(resolve, 1100));
         const comment = {
             platform: "youtube",
-            videoId: "ratetest2",
+            videoId: `ratetest2_${Date.now()}_${Math.random().toString(36).substring(7)}`,
             time: 10,
             text: "Rate limit test",
         };
@@ -106,7 +76,7 @@ describe("Rate Limiting Tests", () => {
             headers: {
                 "Content-Type": "application/json",
                 "x-forwarded-for": "192.168.1.101",
-                Authorization: `Bearer ${authToken}`,
+                Authorization: `Bearer ${token}`,
             },
         });
         expect(res1.status).toBe(200);
@@ -117,7 +87,7 @@ describe("Rate Limiting Tests", () => {
             headers: {
                 "Content-Type": "application/json",
                 "x-forwarded-for": "192.168.1.102",
-                Authorization: `Bearer ${authToken}`,
+                Authorization: `Bearer ${token}`,
             },
         });
         expect(res2.status).toBe(429);
@@ -127,8 +97,9 @@ describe("Rate Limiting Tests", () => {
     });
 
     test("GET /getComments - Rate limit (1 per second)", async () => {
-        const queryParams =
-            "platform=youtube&videoId=retrievaltest&username=retrievaluser";
+        const uniqueVideoId = `retrievaltest_${Date.now()}_${Math.random().toString(36).substring(7)}`;
+        const uniqueUsername = `retrievaluser_${Date.now()}_${Math.random().toString(36).substring(7)}`;
+        const queryParams = `platform=youtube&videoId=${uniqueVideoId}&username=${uniqueUsername}`;
 
         const res1 = await app.request(`/getComments?${queryParams}`, {
             headers: {
@@ -149,8 +120,9 @@ describe("Rate Limiting Tests", () => {
     });
 
     test("GET /getComments - Rate limit by username across IPs", async () => {
-        const queryParams =
-            "platform=youtube&videoId=retrievaltest2&username=retrievaluser2";
+        const uniqueVideoId = `retrievaltest2_${Date.now()}_${Math.random().toString(36).substring(7)}`;
+        const uniqueUsername = `retrievaluser2_${Date.now()}_${Math.random().toString(36).substring(7)}`;
+        const queryParams = `platform=youtube&videoId=${uniqueVideoId}&username=${uniqueUsername}`;
 
         const res1 = await app.request(`/getComments?${queryParams}`, {
             headers: {

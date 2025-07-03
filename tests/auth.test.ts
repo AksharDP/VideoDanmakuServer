@@ -6,22 +6,31 @@ import {
     beforeAll,
     afterAll,
     beforeEach,
+    afterEach,
 } from "bun:test";
 import {
     closeDbConnection,
 } from "../src/db/db";
 import { sign } from "hono/jwt";
+import { 
+    cleanupDatabase, 
+    createTestUserWithToken, 
+    createTestUser,
+    createTestComment,
+    resetRateLimiter,
+    TestUser,
+    addCreatedUser,
+    addCreatedComment,
+    addCreatedVideo
+} from "./testUtils";
 
 const secret = process.env.JWT_SECRET || '';
 
 describe("Auth API", () => {
-
-    beforeAll(async () => {
-        // No migrations needed - database should already be set up
-    });
-
+    // Only cleanup at the end to avoid database connection issues
     afterAll(async () => {
-        // Don't close connection here - let other test files use it
+        // Final cleanup
+        await cleanupDatabase();
     });
 
 
@@ -44,6 +53,11 @@ describe("Auth API", () => {
             expect(json.user).toBeDefined();
             expect(json.user.email).toBe(newUser.email);
             expect(json.user.username).toBe(newUser.username);
+            
+            // Track created user for cleanup
+            if (json.user) {
+                addCreatedUser(json.user.id);
+            }
         });
 
         test("should return 409 if email already exists", async () => {
@@ -54,11 +68,19 @@ describe("Auth API", () => {
                 username: uniqueUsername,
                 password: "password123",
             };
-            await app.request("/signup", {
+            const firstRes = await app.request("/signup", {
                 method: "POST",
                 body: JSON.stringify(newUser),
                 headers: { "Content-Type": "application/json" },
             });
+            
+            // Track the first user created for cleanup
+            if (firstRes.status === 201) {
+                const firstJson = await firstRes.json();
+                if (firstJson.user) {
+                    addCreatedUser(firstJson.user.id);
+                }
+            }
 
             const res = await app.request("/signup", {
                 method: "POST",
@@ -78,11 +100,20 @@ describe("Auth API", () => {
                 username: uniqueUsername,
                 password: "password123",
             };
-            await app.request("/signup", {
+            const firstRes = await app.request("/signup", {
                 method: "POST",
                 body: JSON.stringify(newUser),
                 headers: { "Content-Type": "application/json" },
             });
+            
+            // Track the first user created for cleanup
+            if (firstRes.status === 201) {
+                const firstJson = await firstRes.json();
+                if (firstJson.user) {
+                    addCreatedUser(firstJson.user.id);
+                }
+            }
+            
             const res = await app.request("/signup", {
                 method: "POST",
                 body: JSON.stringify({ ...newUser, email: `new${Date.now()}@example.com` }),
@@ -135,30 +166,14 @@ describe("Auth API", () => {
 
     // Login Tests
     describe("POST /login", () => {
-        let uniqueEmail: string;
-        let uniqueUsername: string;
-
-        beforeEach(async () => {
-            uniqueEmail = `login_${Date.now()}@example.com`;
-            uniqueUsername = `login_${Date.now()}`;
-            const newUser = {
-                email: uniqueEmail,
-                username: uniqueUsername,
-                password: "password123",
-            };
-            await app.request("/signup", {
-                method: "POST",
-                body: JSON.stringify(newUser),
-                headers: { "Content-Type": "application/json" },
-            });
-        });
-
         test("should login successfully with email", async () => {
+            const user = await createTestUser();
+            
             const res = await app.request("/login", {
                 method: "POST",
                 body: JSON.stringify({
-                    emailOrUsername: uniqueEmail,
-                    password: "password123",
+                    emailOrUsername: user.email,
+                    password: user.password,
                 }),
                 headers: { "Content-Type": "application/json" },
             });
@@ -168,11 +183,13 @@ describe("Auth API", () => {
         });
 
         test("should login successfully with username", async () => {
+            const user = await createTestUser();
+            
             const res = await app.request("/login", {
                 method: "POST",
                 body: JSON.stringify({
-                    emailOrUsername: uniqueUsername,
-                    password: "password123",
+                    emailOrUsername: user.username,
+                    password: user.password,
                 }),
                 headers: { "Content-Type": "application/json" },
             });
@@ -212,50 +229,33 @@ describe("Auth API", () => {
 
     // Auth Middleware Tests
     describe("Auth Middleware", () => {
-        let token: string;
-        let userId: number;
-
-        beforeAll(async () => {
-            const newUser = {
-                email: `test_${Date.now()}@example.com`,
-                username: `user_${Date.now()}`,
-                password: "password123",
-            };
-            const signupRes = await app.request("/signup", {
-                method: "POST",
-                body: JSON.stringify(newUser),
-                headers: { "Content-Type": "application/json" },
-            });
-            const signupJson = await signupRes.json();
-            userId = signupJson.user.id;
-
-            const loginRes = await app.request("/login", {
-                method: "POST",
-                body: JSON.stringify({
-                    emailOrUsername: newUser.username,
-                    password: newUser.password,
-                }),
-                headers: { "Content-Type": "application/json" },
-            });
-            const loginJson = await loginRes.json();
-            token = loginJson.token;
-        });
-
         test("should allow access with a valid token", async () => {
+            await resetRateLimiter();
+            const { user, token } = await createTestUserWithToken();
+            
+            const commentData = {
+                platform: "youtube",
+                videoId: `auth_test_${Date.now()}_${Math.random().toString(36).substring(7)}`,
+                time: 1,
+                text: "hello",
+            };
+            
             const res = await app.request("/addComment", {
                 method: "POST",
-                body: JSON.stringify({
-                    platform: "youtube",
-                    videoId: "123",
-                    time: 1,
-                    text: "hello",
-                }),
+                body: JSON.stringify(commentData),
                 headers: {
                     "Content-Type": "application/json",
                     Authorization: `Bearer ${token}`,
                 },
             });
             expect(res.status).toBe(200);
+            
+            // Track created records for cleanup
+            const json = await res.json();
+            if (json.success && json.comment) {
+                addCreatedComment(json.comment.id);
+                addCreatedVideo(commentData.platform, commentData.videoId);
+            }
         });
 
         test("should return 401 for missing token", async () => {
@@ -263,7 +263,7 @@ describe("Auth API", () => {
                 method: "POST",
                 body: JSON.stringify({
                     platform: "youtube",
-                    videoId: "123",
+                    videoId: `auth_test_${Date.now()}_${Math.random().toString(36).substring(7)}`,
                     time: 1,
                     text: "hello",
                 }),
@@ -279,7 +279,7 @@ describe("Auth API", () => {
                 method: "POST",
                 body: JSON.stringify({
                     platform: "youtube",
-                    videoId: "123",
+                    videoId: `auth_test_${Date.now()}_${Math.random().toString(36).substring(7)}`,
                     time: 1,
                     text: "hello",
                 }),
@@ -294,9 +294,11 @@ describe("Auth API", () => {
         });
 
         test("should return 401 for expired token", async () => {
+            const { user } = await createTestUserWithToken();
+            
             const expiredToken = await sign(
                 {
-                    sub: userId,
+                    sub: user.id,
                     iat: Math.floor(Date.now() / 1000) - 3600,
                     exp: Math.floor(Date.now() / 1000) - 1800,
                 },
@@ -307,7 +309,7 @@ describe("Auth API", () => {
                 method: "POST",
                 body: JSON.stringify({
                     platform: "youtube",
-                    videoId: "123",
+                    videoId: `auth_test_${Date.now()}_${Math.random().toString(36).substring(7)}`,
                     time: 1,
                     text: "hello",
                 }),
