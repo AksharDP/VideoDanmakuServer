@@ -58,7 +58,8 @@ export async function validateOrInitDatabase() {
 
 export async function getComments(
     platform: string,
-    videoId: string
+    videoId: string,
+    numOfComments: number = 1000
 ): Promise<{ success: boolean; comments?: any[]; error?: string }> {
     try {
         const video = await db.query.videos.findFirst({
@@ -75,6 +76,7 @@ export async function getComments(
         const comments = await db.query.comments.findMany({
             where: eq(schema.comments.videoId, video.id),
             orderBy: (comments, { asc }) => [asc(comments.time)],
+            limit: numOfComments,
         });
 
         return { success: true, comments };
