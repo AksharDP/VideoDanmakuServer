@@ -4,3 +4,4 @@ node_modules/
 drizzle/
 .env.example
 .dockerignore
+drop.ts
