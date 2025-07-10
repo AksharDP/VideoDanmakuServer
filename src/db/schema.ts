@@ -85,16 +85,36 @@ export const comments = pgTable(
     ]
 );
 
+export const commentReports = pgTable(
+    "comment_reports",
+    {
+        id: serial("id").primaryKey(),
+        commentId: integer("comment_id")
+            .notNull()
+            .references(() => comments.id, { onDelete: "cascade" }),
+        reporterUserId: integer("reporter_user_id")
+            .notNull()
+            .references(() => users.id, { onDelete: "cascade" }),
+        reason: varchar("reason", { length: 255 }).notNull(),
+        additionalDetails: text("additional_details"),
+        createdAt: timestamp("created_at").defaultNow().notNull(),
+    },
+    (table) => [
+        index("report_comment_idx").on(table.commentId),
+        index("reporter_user_idx").on(table.reporterUserId),
+    ]
+);
 
 export const usersRelations = relations(users, ({ many }) => ({
     comments: many(comments),
+    reports: many(commentReports),
 }));
 
 export const videosRelations = relations(videos, ({ many }) => ({
     comments: many(comments),
 }));
 
-export const commentsRelations = relations(comments, ({ one }) => ({
+export const commentsRelations = relations(comments, ({ one, many }) => ({
     author: one(users, {
         fields: [comments.userId],
         references: [users.id],
@@ -102,5 +122,17 @@ export const commentsRelations = relations(comments, ({ one }) => ({
     video: one(videos, {
         fields: [comments.videoId],
         references: [videos.id],
+    }),
+    reports: many(commentReports),
+}));
+
+export const commentReportsRelations = relations(commentReports, ({ one }) => ({
+    comment: one(comments, {
+        fields: [commentReports.commentId],
+        references: [comments.id],
+    }),
+    reporter: one(users, {
+        fields: [commentReports.reporterUserId],
+        references: [users.id],
     }),
 }));

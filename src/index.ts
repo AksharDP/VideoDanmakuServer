@@ -1,6 +1,11 @@
 import { Hono } from "hono";
 import { zValidator } from "@hono/zod-validator";
-import { validateOrInitDatabase, getComments, addComment } from "./db/db";
+import {
+    validateOrInitDatabase,
+    getComments,
+    addComment,
+    reportComment,
+} from "./db/db";
 import { rateLimiter } from "./rateLimit";
 import packageJson from "../package.json";
 import {
@@ -224,6 +229,41 @@ app.post("/addComment", authMiddleware, async (c) => {
         return c.json({ success: false, error: "Failed to add comment" }, 500);
     }
 });
+
+app.post("/reportComment", authMiddleware, async (c) => {
+    try {
+        const user = c.get("user");
+        const { commentId, reason, additionalDetails } = await c.req.json();
+
+        if (!commentId || !reason) {
+            return c.json(
+                { success: false, error: "Missing commentId or reason" },
+                400
+            );
+        }
+
+        const result = await reportComment(
+            commentId,
+            user.id,
+            reason,
+            additionalDetails
+        );
+
+        if (!result.success) {
+            return c.json(result, 400);
+        }
+
+        return c.json(result);
+    } catch (error) {
+        console.error("Error reporting comment:", error);
+        return c.json(
+            { success: false, error: "Failed to report comment" },
+            500
+        );
+    }
+});
+
+
 
 if (process.env.NODE_ENV !== "test") {
     validateOrInitDatabase();

@@ -178,6 +178,53 @@ export async function addComment(
     }
 }
 
+export const reportCommentSchema = z.object({
+    commentId: z.number().int().min(1),
+    reason: z.string().min(1).max(255),
+    additionalDetails: z.string().max(500).optional(),
+});
+
+export async function reportComment(
+    commentId: number,
+    reporterUserId: number,
+    reason: string,
+    additionalDetails?: string
+): Promise<{ success: boolean; error?: string }> {
+    const validation = reportCommentSchema.safeParse({
+        commentId,
+        reason,
+        additionalDetails,
+    });
+
+    if (!validation.success) {
+        return { success: false, error: validation.error.errors[0].message };
+    }
+
+    try {
+        // Verify the comment exists
+        const comment = await db.query.comments.findFirst({
+            where: eq(schema.comments.id, commentId),
+        });
+
+        if (!comment) {
+            return { success: false, error: "Comment not found" };
+        }
+
+        await db.insert(schema.commentReports).values({
+            commentId,
+            reporterUserId,
+            reason,
+            additionalDetails: additionalDetails || null,
+        });
+
+        return { success: true };
+    } catch (error) {
+        console.error("Error reporting comment:", error);
+        return { success: false, error: "Failed to report comment" };
+    }
+}
+
+
 export async function deleteComment(
     commentId: number,
 ): Promise<{ success: boolean; error?: string }> {
