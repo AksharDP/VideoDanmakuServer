@@ -36,7 +36,7 @@ app.post("/signup", zValidator("json", signupSchema), async (c) => {
     try {
         const body = c.req.valid("json");
         const result = await signupUser(body);
-        return c.json(result, result.status as any);
+        return c.json(result.res, result.status as any);
     } catch (error) {
         console.error("Error signing up:", error);
         return c.json({ error: "Missing or invalid parameters" }, 400);
@@ -47,7 +47,7 @@ app.post("/login", zValidator("json", loginSchema), async (c) => {
     try {
         const body = c.req.valid("json");
         const result = await loginUser(body);
-        return c.json(result, result.status as any);
+        return c.json(result.res, result.status as any);
     } catch (error) {
         console.error("Error logging in:", error);
         return c.json({ error: "Missing or invalid parameters" }, 400);
