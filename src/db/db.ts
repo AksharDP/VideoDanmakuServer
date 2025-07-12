@@ -14,15 +14,14 @@ if (!connectionString) {
     );
 }
 
-// Configure connection with better error handling for tests
 const connectionOptions = {
-    onnotice: () => {}, // Suppress notices in tests
-    max: process.env.NODE_ENV === "test" ? 1 : 10, // Use only 1 connection in tests to avoid conflicts
-    idle_timeout: process.env.NODE_ENV === "test" ? 5 : 20, // Shorter timeout in tests
-    connect_timeout: process.env.NODE_ENV === "test" ? 5 : 30, // Shorter connect timeout in tests
-    prepare: false, // Disable prepared statements to avoid conflicts
+    onnotice: () => {},
+    max: process.env.NODE_ENV === "test" ? 1 : 10,
+    idle_timeout: process.env.NODE_ENV === "test" ? 5 : 20,
+    connect_timeout: process.env.NODE_ENV === "test" ? 5 : 30,
+    prepare: false,
     transform: {
-        undefined: null, // Transform undefined to null for better compatibility
+        undefined: null,
     },
 };
 
@@ -83,15 +82,16 @@ export async function getComments(
         return { success: true, comments };
     } catch (error: any) {
         console.error("Error fetching comments:", error);
-        if (error.code === "CONNECTION_ENDED" || error.errno === "CONNECTION_ENDED") {
+        if (
+            error.code === "CONNECTION_ENDED" ||
+            error.errno === "CONNECTION_ENDED"
+        ) {
             return { success: false, error: "Database connection issue" };
         }
         return { success: false, error: "Failed to fetch comments" };
     }
 }
 
-
-// Zod schema for comment validation
 export const addCommentSchema = z.object({
     platform: z.string().min(1).max(63),
     videoId: z.string().min(1).max(255),
@@ -115,7 +115,6 @@ export async function addComment(
     scrollMode: "slide" | "top" | "bottom",
     fontSize: "small" | "normal" | "large"
 ): Promise<{ success: boolean; comment?: any; error?: string; code?: string }> {
-    // Use zod for validation
     const parseResult = addCommentSchema.safeParse({
         platform,
         videoId,
@@ -127,12 +126,14 @@ export async function addComment(
         fontSize,
     });
     if (!parseResult.success) {
-        // Find the first error and return a readable message
         const firstError = parseResult.error.errors[0];
         let code = "invalid_comment";
         if (firstError.path[0] === "platform") code = "invalid_platform";
         if (firstError.path[0] === "videoId") code = "invalid_videoId";
-        if (firstError.path[0] === "text") code = firstError.message.includes("max") ? "comment_too_long" : "invalid_text";
+        if (firstError.path[0] === "text")
+            code = firstError.message.includes("max")
+                ? "comment_too_long"
+                : "invalid_text";
         if (firstError.path[0] === "color") code = "invalid_color";
         if (firstError.path[0] === "time") code = "invalid_time";
         if (firstError.path[0] === "scrollMode") code = "invalid_scrollMode";
@@ -171,7 +172,10 @@ export async function addComment(
         return { success: true, comment: newComment[0] };
     } catch (error: any) {
         console.error("Error adding comment:", error);
-        if (error.code === "CONNECTION_ENDED" || error.errno === "CONNECTION_ENDED") {
+        if (
+            error.code === "CONNECTION_ENDED" ||
+            error.errno === "CONNECTION_ENDED"
+        ) {
             return { success: false, error: "Database connection issue" };
         }
         return { success: false, error: "Failed to add comment" };
@@ -201,7 +205,6 @@ export async function reportComment(
     }
 
     try {
-        // Verify the comment exists
         const comment = await db.query.comments.findFirst({
             where: eq(schema.comments.id, commentId),
         });
@@ -224,24 +227,26 @@ export async function reportComment(
     }
 }
 
-
 export async function deleteComment(
-    commentId: number,
+    commentId: number
 ): Promise<{ success: boolean; error?: string }> {
     try {
         if (process.env.NODE_ENV === "test") {
-            // In test environment, use very short timeout
             const timeoutPromise = new Promise((_, reject) => {
-                setTimeout(() => reject(new Error("Database operation timeout")), 1000);
+                setTimeout(
+                    () => reject(new Error("Database operation timeout")),
+                    1000
+                );
             });
 
             try {
-                const deleted = await Promise.race([
-                    db.delete(schema.comments)
+                const deleted = (await Promise.race([
+                    db
+                        .delete(schema.comments)
                         .where(eq(schema.comments.id, commentId))
                         .returning(),
-                    timeoutPromise
-                ]) as any[];
+                    timeoutPromise,
+                ])) as any[];
 
                 if (deleted.length === 0) {
                     return { success: false, error: "Comment not found" };
@@ -249,25 +254,32 @@ export async function deleteComment(
 
                 return { success: true };
             } catch (error) {
-                // If timeout or any error, just return success to avoid hanging tests
-                console.warn(`Database operation timed out for comment ${commentId}, continuing...`);
+                console.warn(
+                    `Database operation timed out for comment ${commentId}, continuing...`
+                );
                 return { success: true };
             }
         } else {
-            // Production environment - use timeout protection
             const timeoutPromise = new Promise((_, reject) => {
-                setTimeout(() => reject(new Error("Database operation timeout")), 10000);
+                setTimeout(
+                    () => reject(new Error("Database operation timeout")),
+                    10000
+                );
             });
 
-            const deleted = await Promise.race([
-                db.delete(schema.comments)
+            const deleted = (await Promise.race([
+                db
+                    .delete(schema.comments)
                     .where(and(eq(schema.comments.id, commentId)))
                     .returning(),
-                timeoutPromise
-            ]) as any[];
+                timeoutPromise,
+            ])) as any[];
 
             if (deleted.length === 0) {
-                return { success: false, error: "Comment not found or not owned by user" };
+                return {
+                    success: false,
+                    error: "Comment not found or not owned by user",
+                };
             }
 
             return { success: true };
@@ -277,7 +289,10 @@ export async function deleteComment(
         if (error.message === "Database operation timeout") {
             return { success: false, error: "Database operation timed out" };
         }
-        if (error.code === "CONNECTION_ENDED" || error.errno === "CONNECTION_ENDED") {
+        if (
+            error.code === "CONNECTION_ENDED" ||
+            error.errno === "CONNECTION_ENDED"
+        ) {
             return { success: false, error: "Database connection issue" };
         }
         return { success: false, error: "Failed to delete comment" };
@@ -285,22 +300,25 @@ export async function deleteComment(
 }
 
 export async function deleteUser(
-    userId: number,
+    userId: number
 ): Promise<{ success: boolean; error?: string }> {
     try {
         if (process.env.NODE_ENV === "test") {
-            // In test environment, use cascade delete with very short timeout
             const timeoutPromise = new Promise((_, reject) => {
-                setTimeout(() => reject(new Error("Database operation timeout")), 1000);
+                setTimeout(
+                    () => reject(new Error("Database operation timeout")),
+                    1000
+                );
             });
 
             try {
-                const deleted = await Promise.race([
-                    db.delete(schema.users)
+                const deleted = (await Promise.race([
+                    db
+                        .delete(schema.users)
                         .where(eq(schema.users.id, userId))
                         .returning(),
-                    timeoutPromise
-                ]) as any[];
+                    timeoutPromise,
+                ])) as any[];
 
                 if (deleted.length === 0) {
                     return { success: false, error: "User not found" };
@@ -308,12 +326,12 @@ export async function deleteUser(
 
                 return { success: true };
             } catch (error) {
-                // If timeout or any error, just return success to avoid hanging tests
-                console.warn(`Database operation timed out for user ${userId}, continuing...`);
+                console.warn(
+                    `Database operation timed out for user ${userId}, continuing...`
+                );
                 return { success: true };
             }
         } else {
-            // Production environment - use cascade delete
             const deleted = await db
                 .delete(schema.users)
                 .where(eq(schema.users.id, userId))
@@ -327,7 +345,10 @@ export async function deleteUser(
         }
     } catch (error: any) {
         console.error("Error deleting user:", error);
-        if (error.code === "CONNECTION_ENDED" || error.errno === "CONNECTION_ENDED") {
+        if (
+            error.code === "CONNECTION_ENDED" ||
+            error.errno === "CONNECTION_ENDED"
+        ) {
             return { success: false, error: "Database connection issue" };
         }
         return { success: false, error: "Failed to delete user" };
@@ -336,73 +357,82 @@ export async function deleteUser(
 
 export async function deleteVideo(
     platform: string,
-    videoId: string,
+    videoId: string
 ): Promise<{ success: boolean; error?: string }> {
     try {
         if (process.env.NODE_ENV === "test") {
-            // In test environment, use very short timeout and simple approach
             const timeoutPromise = new Promise((_, reject) => {
-                setTimeout(() => reject(new Error("Database operation timeout")), 1000);
+                setTimeout(
+                    () => reject(new Error("Database operation timeout")),
+                    1000
+                );
             });
 
             try {
-                const video = await Promise.race([
+                const video = (await Promise.race([
                     db.query.videos.findFirst({
                         where: and(
                             eq(schema.videos.platform, platform),
                             eq(schema.videos.videoId, videoId)
                         ),
                     }),
-                    timeoutPromise
-                ]) as any;
+                    timeoutPromise,
+                ])) as any;
 
                 if (!video) {
-                    return { success: true }; // Consider it deleted if not found
+                    return { success: true };
                 }
 
-                // Try to delete, but if it times out, just continue
                 await Promise.race([
-                    db.delete(schema.videos).where(eq(schema.videos.id, video.id)),
-                    timeoutPromise
+                    db
+                        .delete(schema.videos)
+                        .where(eq(schema.videos.id, video.id)),
+                    timeoutPromise,
                 ]);
 
                 return { success: true };
             } catch (error) {
-                // If timeout or any error, just return success to avoid hanging tests
-                console.warn(`Database operation timed out for video ${platform}:${videoId}, continuing...`);
+                console.warn(
+                    `Database operation timed out for video ${platform}:${videoId}, continuing...`
+                );
                 return { success: true };
             }
         } else {
-            // Production environment - use timeout protection
             const timeoutPromise = new Promise((_, reject) => {
-                setTimeout(() => reject(new Error("Database operation timeout")), 10000);
+                setTimeout(
+                    () => reject(new Error("Database operation timeout")),
+                    10000
+                );
             });
 
-            const video = await Promise.race([
+            const video = (await Promise.race([
                 db.query.videos.findFirst({
                     where: and(
                         eq(schema.videos.platform, platform),
                         eq(schema.videos.videoId, videoId)
                     ),
                 }),
-                timeoutPromise
-            ]) as any;
+                timeoutPromise,
+            ])) as any;
 
             if (!video) {
                 return { success: false, error: "Video not found" };
             }
 
-            // Delete comments associated with the video with timeout
             await Promise.race([
-                db.delete(schema.comments).where(eq(schema.comments.videoId, video.id)),
-                timeoutPromise
+                db
+                    .delete(schema.comments)
+                    .where(eq(schema.comments.videoId, video.id)),
+                timeoutPromise,
             ]);
 
-            // Delete the video itself with timeout
-            const deleted = await Promise.race([
-                db.delete(schema.videos).where(eq(schema.videos.id, video.id)).returning(),
-                timeoutPromise
-            ]) as any[];
+            const deleted = (await Promise.race([
+                db
+                    .delete(schema.videos)
+                    .where(eq(schema.videos.id, video.id))
+                    .returning(),
+                timeoutPromise,
+            ])) as any[];
 
             if (deleted.length === 0) {
                 return { success: false, error: "Failed to delete video" };
@@ -415,23 +445,21 @@ export async function deleteVideo(
         if (error.message === "Database operation timeout") {
             return { success: false, error: "Database operation timed out" };
         }
-        if (error.code === "CONNECTION_ENDED" || error.errno === "CONNECTION_ENDED") {
+        if (
+            error.code === "CONNECTION_ENDED" ||
+            error.errno === "CONNECTION_ENDED"
+        ) {
             return { success: false, error: "Database connection issue" };
         }
         return { success: false, error: "Failed to delete video" };
     }
 }
 
-
-
 export async function closeDbConnection() {
     try {
         if (process.env.NODE_ENV === "test") {
-            // In test environment, close connection gracefully with longer timeout
             setTimeout(() => {
-                client.end({ timeout: 10 }).catch(() => {
-                    // Ignore errors during test cleanup
-                });
+                client.end({ timeout: 10 }).catch(() => {});
             }, 200);
         } else {
             await client.end({ timeout: 10 });
