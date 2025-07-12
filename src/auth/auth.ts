@@ -51,7 +51,7 @@ export async function signupUser(body: z.infer<typeof signupSchema>) {
         .limit(1);
 
     if (existingUser.length > 0) {
-        return { error: "User already exists", status: 409 };
+        return { message: "User already exists", status: 409 };
     }
 
     const hashedPassword = await bcrypt.hash(password, saltRounds);
@@ -64,11 +64,14 @@ export async function signupUser(body: z.infer<typeof signupSchema>) {
             password: hashedPassword,
         })
         .returning();
+    
+    if (newUser.length === 0) {
+        return { message: "Failed to create user", status: 500 };
+    }
 
     return {
-        message: "User created successfully",
-        user: newUser[0],
-        status: 201,
+        message: newUser[0],
+        status: 200,
     };
 }
 
@@ -92,13 +95,13 @@ export async function loginUser(body: z.infer<typeof loginSchema>) {
         .limit(1);
 
     if (user.length === 0) {
-        return { error: "Invalid credentials", status: 401 };
+        return { message: "Invalid credentials", status: 401 };
     }
 
     const validPassword = await bcrypt.compare(password, user[0].password);
 
     if (!validPassword) {
-        return { error: "Invalid credentials", status: 401 };
+        return { message: "Invalid credentials", status: 401 };
     }
 
     const payload = {
@@ -111,12 +114,16 @@ export async function loginUser(body: z.infer<typeof loginSchema>) {
 
     const token = await sign(payload, secret);
 
-    await db.insert(authTokens).values({
+    const tokenRecord = await db.insert(authTokens).values({
         userId: user[0].id,
         token,
         expiresAt: payload.exp ? new Date(payload.exp * 1000) : null,
     });
 
+    if (token === undefined || tokenRecord.length === 0) {
+        return { message: "Failed to create auth token", status: 500 };
+    }
+    
     return { token, status: 200 };
 }
 

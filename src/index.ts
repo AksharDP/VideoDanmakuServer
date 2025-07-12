@@ -54,15 +54,15 @@ app.post("/login", zValidator("json", loginSchema), async (c) => {
     }
 });
 
-app.post("/forgot-password", async (c) => {
-    try {
-        const result = await forgotPassword();
-        return c.json(result);
-    } catch (error) {
-        console.error("Error processing forgot password request:", error);
-        return c.json({ error: "Failed to process request" }, 500);
-    }
-});
+// app.post("/forgot-password", async (c) => {
+//     try {
+//         const result = await forgotPassword();
+//         return c.json(result);
+//     } catch (error) {
+//         console.error("Error processing forgot password request:", error);
+//         return c.json({ error: "Failed to process request" }, 500);
+//     }
+// });
 
 
 app.get("/", (c) => {
