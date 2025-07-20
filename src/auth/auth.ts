@@ -118,7 +118,7 @@ export async function loginUser(body: z.infer<typeof loginSchema>) {
         userId: user[0].id,
         token,
         expiresAt: payload.exp ? new Date(payload.exp * 1000) : null,
-    });
+    }).returning();
 
     if (token === undefined || tokenRecord.length === 0) {
         return { res: "Failed to create auth token", status: 500 };
