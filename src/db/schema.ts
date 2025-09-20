@@ -82,6 +82,7 @@ export const comments = pgTable(
     (table) => [
         index("user_comments_idx").on(table.userId),
         index("video_comments_idx").on(table.videoId),
+        index("video_time_idx").on(table.videoId, table.time),
     ]
 );
 

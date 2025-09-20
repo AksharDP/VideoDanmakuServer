@@ -12,15 +12,25 @@ interface UserIPMapping {
     lastReset: number;
 }
 
+interface AuthAttemptEntry {
+    count: number;
+    lastAttempt: number;
+    lockoutUntil: number;
+}
+
+
 class RateLimiter {
     private ipLimits: Map<string, RateLimitEntry> = new Map();
     private userLimits: Map<string, RateLimitEntry> = new Map();
     private userIPMappings: Map<string, UserIPMapping> = new Map();
+    private authLimits: Map<string, AuthAttemptEntry> = new Map();
 
     private readonly DAILY_LIMIT: number;
     private readonly COMMENT_INTERVAL: number;
     private readonly RETRIEVAL_INTERVAL: number;
     private readonly DAY_IN_MS = 24 * 60 * 60 * 1000;
+    private readonly MAX_LOGIN_ATTEMPTS = 5;
+    private readonly LOCKOUT_PERIOD = 15 * 60 * 1000;
 
     constructor() {
         this.DAILY_LIMIT =
@@ -40,6 +50,67 @@ class RateLimiter {
             setInterval(() => this.cleanup(), 60 * 60 * 1000);
         }
     }
+    
+    /**
+     * Checks rate limits for authentication attempts.
+     * @param identifier - IP address or username/email
+     * @returns Object with allowed flag and error message
+     */
+    async checkAuthRateLimit(identifier: string): Promise<{ allowed: boolean; error?: string }> {
+        const now = Date.now();
+        const attemptEntry = this.authLimits.get(identifier);
+
+        if (!attemptEntry) {
+            return { allowed: true };
+        }
+
+        if (now < attemptEntry.lockoutUntil) {
+            const remainingTime = Math.ceil((attemptEntry.lockoutUntil - now) / (60 * 1000));
+            return {
+                allowed: false,
+                error: `Too many failed login attempts. Please try again in ${remainingTime} minutes.`,
+            };
+        }
+
+        return { allowed: true };
+    }
+
+    /**
+     * Records a failed login attempt and locks out if necessary.
+     * @param identifier - IP address or username/email
+     */
+    async recordFailedLogin(identifier: string): Promise<void> {
+        const now = Date.now();
+        let attemptEntry = this.authLimits.get(identifier);
+
+        if (!attemptEntry) {
+            attemptEntry = { count: 1, lastAttempt: now, lockoutUntil: 0 };
+        } else {
+            if (now - attemptEntry.lastAttempt > this.LOCKOUT_PERIOD) {
+                attemptEntry.count = 1;
+            } else {
+                attemptEntry.count++;
+            }
+            attemptEntry.lastAttempt = now;
+        }
+
+        if (attemptEntry.count >= this.MAX_LOGIN_ATTEMPTS) {
+            attemptEntry.lockoutUntil = now + this.LOCKOUT_PERIOD;
+        }
+
+        this.authLimits.set(identifier, attemptEntry);
+    }
+
+    /**
+     * Resets login attempts for a given identifier on successful login.
+     * @param identifier - IP address or username/email
+     */
+    async resetLoginAttempts(identifier: string): Promise<void> {
+        if (this.authLimits.has(identifier)) {
+            this.authLimits.delete(identifier);
+        }
+    }
+
 
     /**
      * Check if a comment can be posted based on rate limits
@@ -310,6 +381,22 @@ class RateLimiter {
             this.updateUserRetrievalTime(username, now);
         }
     }
+    
+    private _checkTimeInterval(
+        lastTime: number | undefined,
+        interval: number,
+        message: string
+    ): { allowed: boolean; error?: string } {
+        if (typeof lastTime === 'number' && lastTime > 0) {
+            const now = Date.now();
+            const diff = now - lastTime;
+            if (diff < interval) {
+                const remaining = Math.ceil((interval - diff) / 1000);
+                return { allowed: false, error: `${message} ${remaining} second(s).` };
+            }
+        }
+        return { allowed: true };
+    }
 
     private checkIPRetrievalLimit(
         ip: string,
@@ -326,21 +413,8 @@ class RateLimiter {
             };
             this.ipLimits.set(ip, ipLimit);
         }
-
-        if (
-            ipLimit.lastRetrieval &&
-            now - ipLimit.lastRetrieval < this.RETRIEVAL_INTERVAL
-        ) {
-            const remainingTime = Math.ceil(
-                (this.RETRIEVAL_INTERVAL - (now - ipLimit.lastRetrieval)) / 1000
-            );
-            return {
-                allowed: false,
-                error: `Please wait ${remainingTime} second(s) before requesting comments again.`,
-            };
-        }
-
-        return { allowed: true };
+        
+        return this._checkTimeInterval(ipLimit.lastRetrieval, this.RETRIEVAL_INTERVAL, 'Please wait');
     }
 
     private checkUserRetrievalLimit(
@@ -359,21 +433,7 @@ class RateLimiter {
             this.userLimits.set(username, userLimit);
         }
 
-        if (
-            userLimit.lastRetrieval &&
-            now - userLimit.lastRetrieval < this.RETRIEVAL_INTERVAL
-        ) {
-            const remainingTime = Math.ceil(
-                (this.RETRIEVAL_INTERVAL - (now - userLimit.lastRetrieval)) /
-                    1000
-            );
-            return {
-                allowed: false,
-                error: `Please wait ${remainingTime} second(s) before requesting comments again.`,
-            };
-        }
-
-        return { allowed: true };
+        return this._checkTimeInterval(userLimit.lastRetrieval, this.RETRIEVAL_INTERVAL, 'Please wait');
     }
 
     private checkRetrievalAggregationLimit(
@@ -388,20 +448,8 @@ class RateLimiter {
 
         for (const associatedIP of mapping.ips) {
             const ipLimit = this.ipLimits.get(associatedIP);
-            if (
-                ipLimit &&
-                ipLimit.lastRetrieval &&
-                now - ipLimit.lastRetrieval < this.RETRIEVAL_INTERVAL
-            ) {
-                const remainingTime = Math.ceil(
-                    (this.RETRIEVAL_INTERVAL - (now - ipLimit.lastRetrieval)) /
-                        1000
-                );
-                return {
-                    allowed: false,
-                    error: `Cross-IP retrieval limit: This username was recently used from another IP. Please wait ${remainingTime} second(s).`,
-                };
-            }
+            const check = this._checkTimeInterval(ipLimit?.lastRetrieval, this.RETRIEVAL_INTERVAL, `Cross-IP retrieval limit: This username was recently used from another IP. Please wait`);
+            if(!check.allowed) return check;
         }
 
         return { allowed: true };
@@ -461,9 +509,15 @@ class RateLimiter {
                 this.userIPMappings.delete(username);
             }
         }
+        
+        for (const [identifier, limit] of this.authLimits.entries()) {
+            if (now > limit.lockoutUntil && now - limit.lastAttempt > this.LOCKOUT_PERIOD) {
+                this.authLimits.delete(identifier);
+            }
+        }
 
         console.log(
-            `Rate limiter cleanup completed. Active entries: IP=${this.ipLimits.size}, User=${this.userLimits.size}, Mappings=${this.userIPMappings.size}`
+            `Rate limiter cleanup completed. Active entries: IP=${this.ipLimits.size}, User=${this.userLimits.size}, Mappings=${this.userIPMappings.size}, Auth=${this.authLimits.size}`
         );
     }
 
@@ -475,10 +529,15 @@ class RateLimiter {
             totalIPs: this.ipLimits.size,
             totalUsers: this.userLimits.size,
             totalMappings: this.userIPMappings.size,
+            totalAuth: this.authLimits.size
         };
 
         if (ip && this.ipLimits.has(ip)) {
             status.ipStatus = this.ipLimits.get(ip);
+        }
+        
+        if (ip && this.authLimits.has(ip)) {
+            status.ipAuthStatus = this.authLimits.get(ip);
         }
 
         if (username && this.userLimits.has(username)) {
@@ -491,6 +550,10 @@ class RateLimiter {
                 ...mapping,
                 ips: Array.from(mapping.ips),
             };
+        }
+        
+        if (username && this.authLimits.has(username)) {
+            status.userAuthStatus = this.authLimits.get(username);
         }
 
         return status;
@@ -507,6 +570,7 @@ class RateLimiter {
         this.ipLimits.clear();
         this.userLimits.clear();
         this.userIPMappings.clear();
+        this.authLimits.clear();
     }
 }
 

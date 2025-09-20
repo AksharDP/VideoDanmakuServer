@@ -46,7 +46,28 @@ app.post("/signup", zValidator("json", signupSchema), async (c) => {
 app.post("/login", zValidator("json", loginSchema), async (c) => {
     try {
         const body = c.req.valid("json");
+        const clientIP = c.req.header("x-forwarded-for") || c.req.header("x-real-ip") || "unknown";
+        const identifier = body.emailOrUsername.toLowerCase();
+
+        const ipRateLimitCheck = await rateLimiter.checkAuthRateLimit(clientIP);
+        if (!ipRateLimitCheck.allowed) {
+            return c.json({ error: ipRateLimitCheck.error, type: "rate_limit" }, 429);
+        }
+        const identifierRateLimitCheck = await rateLimiter.checkAuthRateLimit(identifier);
+        if (!identifierRateLimitCheck.allowed) {
+            return c.json({ error: identifierRateLimitCheck.error, type: "rate_limit" }, 429);
+        }
+
         const result = await loginUser(body);
+
+        if (result.status !== 200) {
+            await rateLimiter.recordFailedLogin(clientIP);
+            await rateLimiter.recordFailedLogin(identifier);
+        } else {
+            await rateLimiter.resetLoginAttempts(clientIP);
+            await rateLimiter.resetLoginAttempts(identifier);
+        }
+
         return c.json(result.res, result.status as any);
     } catch (error) {
         console.error("Error logging in:", error);
@@ -54,15 +75,6 @@ app.post("/login", zValidator("json", loginSchema), async (c) => {
     }
 });
 
-// app.post("/forgot-password", async (c) => {
-//     try {
-//         const result = await forgotPassword();
-//         return c.json(result);
-//     } catch (error) {
-//         console.error("Error processing forgot password request:", error);
-//         return c.json({ error: "Failed to process request" }, 500);
-//     }
-// });
 
 
 app.get("/", (c) => {
@@ -103,7 +115,6 @@ app.get("/getComments", async (c) => {
             ? sanitizeHtml(username, { allowedTags: [], allowedAttributes: {} })
             : undefined;
 
-        // Parse numOfComments, default to 1000 if not provided or invalid
         let commentLimit = 1000;
         if (limit !== undefined) {
             const parsed = parseInt(limit, 10);
@@ -155,7 +166,6 @@ app.post("/addComment", authMiddleware, async (c) => {
             await c.req.json();
 
 
-        // Check for required fields (basic presence)
         if (!platform || !videoId || time === undefined || !text) {
             return c.json(
                 {
@@ -301,4 +311,3 @@ if (process.env.NODE_ENV === "test") {
 }
 
 export default serverExport;
-

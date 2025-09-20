@@ -16,10 +16,10 @@ if (!connectionString) {
 
 const connectionOptions = {
     onnotice: () => {},
-    max: process.env.NODE_ENV === "test" ? 1 : 10,
-    idle_timeout: process.env.NODE_ENV === "test" ? 5 : 20,
+    max: process.env.NODE_ENV === "test" ? 1 : 20,
+    idle_timeout: process.env.NODE_ENV === "test" ? 5 : 30,
     connect_timeout: process.env.NODE_ENV === "test" ? 5 : 30,
-    prepare: false,
+    prepare: true,
     transform: {
         undefined: null,
     },
@@ -60,7 +60,7 @@ export async function getComments(
     platform: string,
     videoId: string,
     numOfComments: number = 1000
-): Promise<{ success: boolean; comments?: any[]; error?: string }> {
+): Promise<{ success: boolean; comments?: any[]; error?: string; code?: string; source?: string }> {
     try {
         const video = await db.query.videos.findFirst({
             where: and(
@@ -79,16 +79,16 @@ export async function getComments(
             limit: numOfComments,
         });
 
-        return { success: true, comments };
+        return { success: true, comments, source: 'database' };
     } catch (error: any) {
         console.error("Error fetching comments:", error);
         if (
             error.code === "CONNECTION_ENDED" ||
             error.errno === "CONNECTION_ENDED"
         ) {
-            return { success: false, error: "Database connection issue" };
+            return { success: false, error: "Database connection issue", code: 'db_connection_error' };
         }
-        return { success: false, error: "Failed to fetch comments" };
+        return { success: false, error: "Failed to fetch comments", code: 'fetch_failed' };
     }
 }
 
@@ -97,7 +97,7 @@ export const addCommentSchema = z.object({
     videoId: z.string().min(1).max(255),
     time: z.number().int().min(0),
     text: z.string().min(1).max(350),
-    color: z.string().max(15),
+    color: z.string().regex(/^#([0-9a-f]{3}){1,2}$/i, { message: "Invalid hex color format" }).max(15),
     userId: z.number().int().min(1),
     scrollMode: z.enum(["slide", "top", "bottom"]),
     fontSize: z.enum(["small", "normal", "large"]),
@@ -168,7 +168,7 @@ export async function addComment(
                 fontSize,
             })
             .returning();
-
+        
         return { success: true, comment: newComment[0] };
     } catch (error: any) {
         console.error("Error adding comment:", error);
@@ -176,9 +176,9 @@ export async function addComment(
             error.code === "CONNECTION_ENDED" ||
             error.errno === "CONNECTION_ENDED"
         ) {
-            return { success: false, error: "Database connection issue" };
+            return { success: false, error: "Database connection issue", code: 'db_connection_error' };
         }
-        return { success: false, error: "Failed to add comment" };
+        return { success: false, error: "Failed to add comment", code: 'add_failed' };
     }
 }
 
@@ -193,7 +193,7 @@ export async function reportComment(
     reporterUserId: number,
     reason: string,
     additionalDetails?: string
-): Promise<{ success: boolean; error?: string }> {
+): Promise<{ success: boolean; error?: string; code?: string }> {
     const validation = reportCommentSchema.safeParse({
         commentId,
         reason,
@@ -201,7 +201,7 @@ export async function reportComment(
     });
 
     if (!validation.success) {
-        return { success: false, error: validation.error.errors[0].message };
+        return { success: false, error: validation.error.errors[0].message, code: 'validation_failed' };
     }
 
     try {
@@ -210,7 +210,7 @@ export async function reportComment(
         });
 
         if (!comment) {
-            return { success: false, error: "Comment not found" };
+            return { success: false, error: "Comment not found", code: 'comment_not_found' };
         }
 
         await db.insert(schema.commentReports).values({
@@ -223,7 +223,7 @@ export async function reportComment(
         return { success: true };
     } catch (error) {
         console.error("Error reporting comment:", error);
-        return { success: false, error: "Failed to report comment" };
+        return { success: false, error: "Failed to report comment", code: 'report_failed' };
     }
 }
 
