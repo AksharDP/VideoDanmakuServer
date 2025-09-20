@@ -91,7 +91,7 @@ app.get("/ping", (c) => {
 
 app.get("/getComments", async (c) => {
     try {
-        const { platform, videoId, username, limit } = c.req.query();
+        const { platform, videoId, username, totalCommentLimit, bucketSize, maxCommentsPerBucket } = c.req.query();
 
         if (!platform || !videoId) {
             return c.json(
@@ -115,13 +115,10 @@ app.get("/getComments", async (c) => {
             ? sanitizeHtml(username, { allowedTags: [], allowedAttributes: {} })
             : undefined;
 
-        let commentLimit = 1000;
-        if (limit !== undefined) {
-            const parsed = parseInt(limit, 10);
-            if (!isNaN(parsed) && parsed > 0) {
-                commentLimit = parsed;
-            }
-        }
+        // Parse and validate new parameters with defaults
+        const totalLimit = totalCommentLimit ? parseInt(totalCommentLimit, 10) : 1000;
+        const bSize = bucketSize ? parseInt(bucketSize, 10) : 5;
+        const maxPerBucket = maxCommentsPerBucket ? parseInt(maxCommentsPerBucket, 10) : 25;
 
         const clientIP =
             c.req.header("x-forwarded-for") ||
@@ -143,7 +140,7 @@ app.get("/getComments", async (c) => {
             );
         }
 
-        const result = await getComments(sanitizedPlatform, sanitizedVideoId, commentLimit);
+        const result = await getComments(sanitizedPlatform, sanitizedVideoId, totalLimit, bSize, maxPerBucket);
 
         if (result.success) {
             await rateLimiter.recordRetrieval(clientIP, sanitizedUsername);

@@ -56,11 +56,19 @@ export async function validateOrInitDatabase() {
     }
 }
 
+type Comment = Omit<typeof schema.comments.$inferSelect, 'userId' | 'videoId'> & {
+    user_id: number;
+    video_id: number;
+};
+
+
 export async function getComments(
     platform: string,
     videoId: string,
-    numOfComments: number = 1000
-): Promise<{ success: boolean; comments?: any[]; error?: string; code?: string; source?: string }> {
+    totalCommentLimit: number = 1000,
+    bucketSize: number = 5,
+    maxCommentsPerBucket: number = 25
+): Promise<{ success: boolean; comments?: Comment[]; error?: string; code?: string; source?: string }> {
     try {
         const video = await db.query.videos.findFirst({
             where: and(
@@ -72,12 +80,65 @@ export async function getComments(
         if (!video) {
             return { success: true, comments: [] };
         }
+        
+        // Pass 1: Get comment density distribution
+        const densityQuery = sql`
+            SELECT floor(time / ${bucketSize}) as bucket, COUNT(*) as "commentCount"
+            FROM ${schema.comments}
+            WHERE video_id = ${video.id}
+            GROUP BY bucket;
+        `;
+        const densityResult: { bucket: number, commentCount: string }[] = await db.execute(densityQuery);
+        const densityMap = densityResult.map(r => ({ bucket: r.bucket, count: parseInt(r.commentCount, 10) }));
 
-        const comments = await db.query.comments.findMany({
-            where: eq(schema.comments.videoId, video.id),
-            orderBy: (comments, { asc }) => [asc(comments.time)],
-            limit: numOfComments,
-        });
+        if (densityMap.length === 0) {
+            return { success: true, comments: [] };
+        }
+
+        // Logic: Allocate limits proportionally based on density
+        const totalCommentsInVideo = densityMap.reduce((sum, b) => sum + b.count, 0);
+
+        const bucketLimits = densityMap.map(bucketInfo => {
+            const proportionalLimit = (bucketInfo.count / totalCommentsInVideo) * totalCommentLimit;
+            // Apply the cap, but also ensure we don't try to fetch more comments than exist in the bucket
+            const finalLimit = Math.ceil(Math.min(proportionalLimit, maxCommentsPerBucket, bucketInfo.count));
+            return {
+                bucket: bucketInfo.bucket,
+                limit: finalLimit
+            };
+        }).filter(b => b.limit > 0);
+
+        if (bucketLimits.length === 0) {
+            return { success: true, comments: [] };
+        }
+
+        // Pass 2: Build a single dynamic query to fetch the sampled comments
+        const whereClauses = bucketLimits.map(bl => sql`(rc.bucket = ${bl.bucket} AND rc.rn <= ${bl.limit})`);
+        
+        const finalQuery = sql`
+            WITH ranked_comments AS (
+                SELECT
+                    c.*,
+                    floor(c.time / ${bucketSize}) as bucket,
+                    ROW_NUMBER() OVER(PARTITION BY floor(c.time / ${bucketSize}) ORDER BY c.created_at DESC) as rn
+                FROM
+                    ${schema.comments} as c
+                WHERE
+                    c.video_id = ${video.id}
+            )
+            SELECT
+                rc.id, rc.content, rc.time, rc.user_id, rc.video_id, rc.scroll_mode, rc.color, rc.font_size, rc.created_at
+            FROM
+                ranked_comments rc
+            WHERE
+                ${sql.join(whereClauses, sql` OR `)}
+            ORDER BY
+                rc.time ASC;
+        `;
+        
+        const result: any = await db.execute(finalQuery);
+        const comments: Comment[] = Array.isArray(result) ? result : result.rows;
+
 
         return { success: true, comments, source: 'database' };
     } catch (error: any) {
@@ -91,6 +152,7 @@ export async function getComments(
         return { success: false, error: "Failed to fetch comments", code: 'fetch_failed' };
     }
 }
+
 
 export const addCommentSchema = z.object({
     platform: z.string().min(1).max(63),
@@ -257,7 +319,7 @@ export async function deleteComment(
                 console.warn(
                     `Database operation timed out for comment ${commentId}, continuing...`
                 );
-                return { success: true };
+                return { success: false, error: "Database operation timed out" };
             }
         } else {
             const timeoutPromise = new Promise((_, reject) => {
@@ -329,7 +391,7 @@ export async function deleteUser(
                 console.warn(
                     `Database operation timed out for user ${userId}, continuing...`
                 );
-                return { success: true };
+                return { success: false, error: "Database operation timed out" };
             }
         } else {
             const deleted = await db
@@ -395,7 +457,7 @@ export async function deleteVideo(
                 console.warn(
                     `Database operation timed out for video ${platform}:${videoId}, continuing...`
                 );
-                return { success: true };
+                return { success: false, error: "Database operation timed out" };
             }
         } else {
             const timeoutPromise = new Promise((_, reject) => {
