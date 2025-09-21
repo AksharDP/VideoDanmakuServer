@@ -5,6 +5,9 @@ import {
     getComments,
     addComment,
     reportComment,
+    likeComment,
+    removeLike,
+    getCommentLikes,
 } from "./db/db";
 import { rateLimiter } from "./rateLimit";
 import packageJson from "../package.json";
@@ -43,6 +46,18 @@ app.post("/signup", zValidator("json", signupSchema), async (c) => {
     }
 });
 
+app.get("/login", (c) => {
+    return c.json({
+        message: "Login endpoint - use POST method",
+        methods: ["POST"],
+        schema: {
+            emailOrUsername: "string",
+            password: "string",
+            rememberMe: "boolean (optional)"
+        }
+    });
+});
+
 app.post("/login", zValidator("json", loginSchema), async (c) => {
     try {
         const body = c.req.valid("json");
@@ -75,8 +90,6 @@ app.post("/login", zValidator("json", loginSchema), async (c) => {
     }
 });
 
-
-
 app.get("/", (c) => {
     return c.json({
         message: "VideoDanmakuServer is running!",
@@ -87,7 +100,6 @@ app.get("/", (c) => {
 app.get("/ping", (c) => {
     return c.json({ status: "ok", timestamp: new Date().toISOString() });
 });
-
 
 app.get("/getComments", async (c) => {
     try {
@@ -103,22 +115,19 @@ app.get("/getComments", async (c) => {
             );
         }
 
-        const sanitizedPlatform = sanitizeHtml(platform, {
-            allowedTags: [],
-            allowedAttributes: {},
-        });
-        const sanitizedVideoId = sanitizeHtml(videoId, {
-            allowedTags: [],
-            allowedAttributes: {},
-        });
         const sanitizedUsername = username
             ? sanitizeHtml(username, { allowedTags: [], allowedAttributes: {} })
             : undefined;
-
-        // Parse and validate new parameters with defaults
-        const totalLimit = totalCommentLimit ? parseInt(totalCommentLimit, 10) : 1000;
-        const bSize = bucketSize ? parseInt(bucketSize, 10) : 5;
-        const maxPerBucket = maxCommentsPerBucket ? parseInt(maxCommentsPerBucket, 10) : 25;
+        
+        if (!sanitizedUsername) {
+            return c.json(
+                {
+                    success: false,
+                    error: "Invalid username",
+                },
+                400
+            );
+        }
 
         const clientIP =
             c.req.header("x-forwarded-for") ||
@@ -139,6 +148,20 @@ app.get("/getComments", async (c) => {
                 429
             );
         }
+
+        const sanitizedPlatform = sanitizeHtml(platform, {
+            allowedTags: [],
+            allowedAttributes: {},
+        });
+        const sanitizedVideoId = sanitizeHtml(videoId, {
+            allowedTags: [],
+            allowedAttributes: {},
+        });
+
+        // Parse and validate new parameters with defaults
+        const totalLimit = totalCommentLimit ? parseInt(totalCommentLimit, 10) : 1000;
+        const bSize = bucketSize ? parseInt(bucketSize, 10) : 5;
+        const maxPerBucket = maxCommentsPerBucket ? parseInt(maxCommentsPerBucket, 10) : 25;
 
         const result = await getComments(sanitizedPlatform, sanitizedVideoId, totalLimit, bSize, maxPerBucket);
 
@@ -265,6 +288,96 @@ app.post("/reportComment", authMiddleware, async (c) => {
         console.error("Error reporting comment:", error);
         return c.json(
             { success: false, error: "Failed to report comment" },
+            500
+        );
+    }
+});
+
+app.post("/likeComment", authMiddleware, async (c) => {
+    try {
+        const user = c.get("user");
+        const { commentId, isLike } = await c.req.json();
+
+        if (commentId === undefined || isLike === undefined) {
+            return c.json(
+                { success: false, error: "Missing commentId or isLike" },
+                400
+            );
+        }
+
+        if (typeof isLike !== "boolean") {
+            return c.json(
+                { success: false, error: "isLike must be a boolean" },
+                400
+            );
+        }
+
+        const result = await likeComment(commentId, user.id, isLike);
+
+        if (!result.success) {
+            return c.json(result, 400);
+        }
+
+        return c.json(result);
+    } catch (error) {
+        console.error("Error liking comment:", error);
+        return c.json(
+            { success: false, error: "Failed to like comment" },
+            500
+        );
+    }
+});
+
+app.post("/removeLike", authMiddleware, async (c) => {
+    try {
+        const user = c.get("user");
+        const { commentId } = await c.req.json();
+
+        if (!commentId) {
+            return c.json(
+                { success: false, error: "Missing commentId" },
+                400
+            );
+        }
+
+        const result = await removeLike(commentId, user.id);
+
+        if (!result.success) {
+            return c.json(result, 400);
+        }
+
+        return c.json(result);
+    } catch (error) {
+        console.error("Error removing like:", error);
+        return c.json(
+            { success: false, error: "Failed to remove like" },
+            500
+        );
+    }
+});
+
+app.get("/commentLikes/:commentId", async (c) => {
+    try {
+        const commentId = parseInt(c.req.param("commentId"), 10);
+
+        if (isNaN(commentId)) {
+            return c.json(
+                { success: false, error: "Invalid commentId" },
+                400
+            );
+        }
+
+        const result = await getCommentLikes(commentId);
+
+        if (!result.success) {
+            return c.json(result, 400);
+        }
+
+        return c.json(result);
+    } catch (error) {
+        console.error("Error getting comment likes:", error);
+        return c.json(
+            { success: false, error: "Failed to get comment likes" },
             500
         );
     }

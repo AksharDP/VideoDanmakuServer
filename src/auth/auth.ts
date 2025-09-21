@@ -51,7 +51,7 @@ export async function signupUser(body: z.infer<typeof signupSchema>) {
         .limit(1);
 
     if (existingUser.length > 0) {
-        return { res: "User already exists", status: 409 };
+        return { res: { error: "User already exists" }, status: 409 };
     }
 
     const hashedPassword = await bcrypt.hash(password, saltRounds);
@@ -66,12 +66,15 @@ export async function signupUser(body: z.infer<typeof signupSchema>) {
         .returning();
     
     if (newUser.length === 0) {
-        return { res: "Failed to create user", status: 500 };
+        return { res: { error: "Failed to create user" }, status: 500 };
     }
 
     return {
-        res: newUser[0],
-        status: 200,
+        res: { 
+            message: "User created successfully",
+            user: newUser[0] 
+        },
+        status: 201,
     };
 }
 
@@ -95,13 +98,13 @@ export async function loginUser(body: z.infer<typeof loginSchema>) {
         .limit(1);
 
     if (user.length === 0) {
-        return { res: "Invalid credentials", status: 401 };
+        return { res: { error: "Invalid credentials" }, status: 401 };
     }
 
     const validPassword = await bcrypt.compare(password, user[0].password);
 
     if (!validPassword) {
-        return { res: "Invalid credentials", status: 401 };
+        return { res: { error: "Invalid credentials" }, status: 401 };
     }
 
     const payload = {
@@ -121,7 +124,7 @@ export async function loginUser(body: z.infer<typeof loginSchema>) {
     }).returning();
 
     if (token === undefined || tokenRecord.length === 0) {
-        return { res: "Failed to create auth token", status: 500 };
+        return { res: { error: "Failed to create auth token" }, status: 500 };
     }
 
     return { res: { token }, status: 200 };

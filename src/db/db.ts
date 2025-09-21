@@ -59,6 +59,7 @@ export async function validateOrInitDatabase() {
 type Comment = Omit<typeof schema.comments.$inferSelect, 'userId' | 'videoId'> & {
     user_id: number;
     video_id: number;
+    like_score?: number;
 };
 
 
@@ -120,14 +121,22 @@ export async function getComments(
                 SELECT
                     c.*,
                     floor(c.time / ${bucketSize}) as bucket,
-                    ROW_NUMBER() OVER(PARTITION BY floor(c.time / ${bucketSize}) ORDER BY c.created_at DESC) as rn
+                    COALESCE(SUM(cl.is_like), 0) as like_score,
+                    ROW_NUMBER() OVER(
+                        PARTITION BY floor(c.time / ${bucketSize}) 
+                        ORDER BY COALESCE(SUM(cl.is_like), 0) DESC, c.created_at DESC
+                    ) as rn
                 FROM
                     ${schema.comments} as c
+                LEFT JOIN
+                    ${schema.commentLikes} as cl ON c.id = cl.comment_id
                 WHERE
                     c.video_id = ${video.id}
+                GROUP BY
+                    c.id, c.content, c.time, c.user_id, c.video_id, c.scroll_mode, c.color, c.font_size, c.created_at
             )
             SELECT
-                rc.id, rc.content, rc.time, rc.user_id, rc.video_id, rc.scroll_mode, rc.color, rc.font_size, rc.created_at
+                rc.id, rc.content, rc.time, rc.user_id, rc.video_id, rc.scroll_mode, rc.color, rc.font_size, rc.created_at, rc.like_score
             FROM
                 ranked_comments rc
             WHERE
@@ -514,6 +523,101 @@ export async function deleteVideo(
             return { success: false, error: "Database connection issue" };
         }
         return { success: false, error: "Failed to delete video" };
+    }
+}
+
+export async function likeComment(
+    commentId: number,
+    userId: number,
+    isLike: boolean
+): Promise<{ success: boolean; error?: string; code?: string }> {
+    try {
+        // Check if comment exists
+        const comment = await db.query.comments.findFirst({
+            where: eq(schema.comments.id, commentId),
+        });
+
+        if (!comment) {
+            return { success: false, error: "Comment not found", code: 'comment_not_found' };
+        }
+
+        const likeValue = isLike ? 1 : -1;
+
+        // Insert or update the like
+        await db
+            .insert(schema.commentLikes)
+            .values({
+                commentId,
+                userId,
+                isLike: likeValue,
+            })
+            .onConflictDoUpdate({
+                target: [schema.commentLikes.commentId, schema.commentLikes.userId],
+                set: { 
+                    isLike: likeValue,
+                    updatedAt: sql`now()`,
+                },
+            });
+
+        return { success: true };
+    } catch (error) {
+        console.error("Error liking comment:", error);
+        return { success: false, error: "Failed to like comment", code: 'like_failed' };
+    }
+}
+
+export async function removeLike(
+    commentId: number,
+    userId: number
+): Promise<{ success: boolean; error?: string; code?: string }> {
+    try {
+        // Check if comment exists
+        const comment = await db.query.comments.findFirst({
+            where: eq(schema.comments.id, commentId),
+        });
+
+        if (!comment) {
+            return { success: false, error: "Comment not found", code: 'comment_not_found' };
+        }
+
+        // Remove the like/dislike
+        await db
+            .delete(schema.commentLikes)
+            .where(
+                and(
+                    eq(schema.commentLikes.commentId, commentId),
+                    eq(schema.commentLikes.userId, userId)
+                )
+            );
+
+        return { success: true };
+    } catch (error) {
+        console.error("Error removing like:", error);
+        return { success: false, error: "Failed to remove like", code: 'remove_like_failed' };
+    }
+}
+
+export async function getCommentLikes(
+    commentId: number
+): Promise<{ success: boolean; likes?: number; dislikes?: number; error?: string; code?: string }> {
+    try {
+        const likesResult = await db
+            .select({
+                likes: sql<number>`COUNT(CASE WHEN is_like = 1 THEN 1 END)`,
+                dislikes: sql<number>`COUNT(CASE WHEN is_like = -1 THEN 1 END)`,
+            })
+            .from(schema.commentLikes)
+            .where(eq(schema.commentLikes.commentId, commentId));
+
+        const result = likesResult[0];
+        return { 
+            success: true, 
+            likes: Number(result.likes) || 0, 
+            dislikes: Number(result.dislikes) || 0 
+        };
+    } catch (error) {
+        console.error("Error getting comment likes:", error);
+        return { success: false, error: "Failed to get likes", code: 'get_likes_failed' };
     }
 }
 
