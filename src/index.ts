@@ -118,16 +118,6 @@ app.get("/getComments", async (c) => {
         const sanitizedUsername = username
             ? sanitizeHtml(username, { allowedTags: [], allowedAttributes: {} })
             : undefined;
-        
-        if (!sanitizedUsername) {
-            return c.json(
-                {
-                    success: false,
-                    error: "Invalid username",
-                },
-                400
-            );
-        }
 
         const clientIP =
             c.req.header("x-forwarded-for") ||
