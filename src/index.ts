@@ -1,568 +1,310 @@
-import { and, eq, sql } from "drizzle-orm";
-import { drizzle } from "drizzle-orm/postgres-js";
-import { migrate } from "drizzle-orm/postgres-js/migrator";
-import path from "path";
-import * as schema from "./db/schema";
-import { z } from "zod";
+import { Hono } from "hono";
+import { zValidator } from "@hono/zod-validator";
+import {
+    validateOrInitDatabase,
+    getComments,
+    addComment,
+    reportComment,
+} from "./db/db";
+import { rateLimiter } from "./rateLimit";
+import packageJson from "../package.json";
+import {
+    signupUser,
+    loginUser,
+    forgotPassword,
+    authMiddleware,
+    signupSchema,
+    loginSchema,
+} from "./auth/auth";
+import sanitizeHtml from "sanitize-html";
+import { cors as honoCors } from 'hono/cors';
 
-const postgres = require("postgres").default;
-let connectionString = process.env.DATABASE_URL;
+const app = new Hono();
 
-if (!connectionString) {
-    throw new Error(
-        "DATABASE_URL environment variable is required. Please set it in your system environment variables."
-    );
-}
+app.use('/*', honoCors({
+    origin: [
+        'https://www.youtube.com',
+        'https://youtube.com'
+    ],
+    allowMethods: ['GET', 'POST'],
+    allowHeaders: ['Content-Type', 'Authorization', 'X-Forwarded-For', 'X-Real-IP'],
+    credentials: true,
+    exposeHeaders: ['Content-Length', 'X-Request-ID'],
+}));
 
-const connectionOptions = {
-    onnotice: () => {},
-    max: process.env.NODE_ENV === "test" ? 1 : 20,
-    idle_timeout: process.env.NODE_ENV === "test" ? 5 : 30,
-    connect_timeout: process.env.NODE_ENV === "test" ? 5 : 30,
-    prepare: true,
-    transform: {
-        undefined: null,
-    },
-};
-
-const client = postgres(connectionString, connectionOptions);
-const db = drizzle(client, { schema });
-
-export async function runMigrations() {
+app.post("/signup", zValidator("json", signupSchema), async (c) => {
     try {
-        console.log("Running database migrations...");
-        await migrate(db, {
-            migrationsFolder: path.join(__dirname, "../../drizzle"),
-        });
-        console.log("Database migrations completed successfully.");
+        const body = c.req.valid("json");
+        const result = await signupUser(body);
+        return c.json(result.res, result.status as any);
     } catch (error) {
-        console.error("Error running database migrations:", error);
-        throw error;
+        console.error("Error signing up:", error);
+        return c.json({ error: "Missing or invalid parameters" }, 400);
     }
-}
+});
 
-export async function validateOrInitDatabase() {
+app.post("/login", zValidator("json", loginSchema), async (c) => {
     try {
-        await db.select().from(schema.comments).limit(1);
-        console.log("Comments table exists and is accessible");
+        const body = c.req.valid("json");
+        const clientIP = c.req.header("x-forwarded-for") || c.req.header("x-real-ip") || "unknown";
+        const identifier = body.emailOrUsername.toLowerCase();
 
-        console.log("Database validation completed");
+        const ipRateLimitCheck = await rateLimiter.checkAuthRateLimit(clientIP);
+        if (!ipRateLimitCheck.allowed) {
+            return c.json({ error: ipRateLimitCheck.error, type: "rate_limit" }, 429);
+        }
+        const identifierRateLimitCheck = await rateLimiter.checkAuthRateLimit(identifier);
+        if (!identifierRateLimitCheck.allowed) {
+            return c.json({ error: identifierRateLimitCheck.error, type: "rate_limit" }, 429);
+        }
+
+        const result = await loginUser(body);
+
+        if (result.status !== 200) {
+            await rateLimiter.recordFailedLogin(clientIP);
+            await rateLimiter.recordFailedLogin(identifier);
+        } else {
+            await rateLimiter.resetLoginAttempts(clientIP);
+            await rateLimiter.resetLoginAttempts(identifier);
+        }
+
+        return c.json(result.res, result.status as any);
     } catch (error) {
-        console.error(
-            "Database validation failed, initializing database:",
-            error
+        console.error("Error logging in:", error);
+        return c.json({ error: "Missing or invalid parameters" }, 400);
+    }
+});
+
+
+
+app.get("/", (c) => {
+    return c.json({
+        message: "VideoDanmakuServer is running!",
+        version: packageJson.version,
+    });
+});
+
+app.get("/ping", (c) => {
+    return c.json({ status: "ok", timestamp: new Date().toISOString() });
+});
+
+
+app.get("/getComments", async (c) => {
+    try {
+        const { platform, videoId, username, totalCommentLimit, bucketSize, maxCommentsPerBucket } = c.req.query();
+
+        if (!platform || !videoId) {
+            return c.json(
+                {
+                    success: false,
+                    error: "Missing platform or videoId query parameters",
+                },
+                400
+            );
+        }
+
+        const sanitizedPlatform = sanitizeHtml(platform, {
+            allowedTags: [],
+            allowedAttributes: {},
+        });
+        const sanitizedVideoId = sanitizeHtml(videoId, {
+            allowedTags: [],
+            allowedAttributes: {},
+        });
+        const sanitizedUsername = username
+            ? sanitizeHtml(username, { allowedTags: [], allowedAttributes: {} })
+            : undefined;
+
+        // Parse and validate new parameters with defaults
+        const totalLimit = totalCommentLimit ? parseInt(totalCommentLimit, 10) : 1000;
+        const bSize = bucketSize ? parseInt(bucketSize, 10) : 5;
+        const maxPerBucket = maxCommentsPerBucket ? parseInt(maxCommentsPerBucket, 10) : 25;
+
+        const clientIP =
+            c.req.header("x-forwarded-for") ||
+            c.req.header("x-real-ip") ||
+            "unknown";
+
+        const rateLimitCheck = await rateLimiter.checkRetrievalRateLimit(
+            clientIP,
+            sanitizedUsername
         );
-        await runMigrations();
-    }
-}
-
-type Comment = Omit<typeof schema.comments.$inferSelect, 'userId' | 'videoId'> & {
-    user_id: number;
-    video_id: number;
-};
-
-
-export async function getComments(
-    platform: string,
-    videoId: string,
-    totalCommentLimit: number = 1000,
-    bucketSize: number = 5,
-    maxCommentsPerBucket: number = 25
-): Promise<{ success: boolean; comments?: Comment[]; error?: string; code?: string; source?: string }> {
-    try {
-        const video = await db.query.videos.findFirst({
-            where: and(
-                eq(schema.videos.platform, platform),
-                eq(schema.videos.videoId, videoId)
-            ),
-        });
-
-        if (!video) {
-            return { success: true, comments: [] };
-        }
-        
-        // Pass 1: Get comment density distribution
-        const densityQuery = sql`
-            SELECT floor(time / ${bucketSize}) as bucket, COUNT(*) as "commentCount"
-            FROM ${schema.comments}
-            WHERE video_id = ${video.id}
-            GROUP BY bucket;
-        `;
-        const densityResult: { bucket: number, commentCount: string }[] = await db.execute(densityQuery);
-        const densityMap = densityResult.map(r => ({ bucket: r.bucket, count: parseInt(r.commentCount, 10) }));
-
-        if (densityMap.length === 0) {
-            return { success: true, comments: [] };
+        if (!rateLimitCheck.allowed) {
+            return c.json(
+                {
+                    success: false,
+                    error: rateLimitCheck.error,
+                    type: "rate_limit",
+                },
+                429
+            );
         }
 
-        // Logic: Allocate limits proportionally based on density
-        const totalCommentsInVideo = densityMap.reduce((sum, b) => sum + b.count, 0);
+        const result = await getComments(sanitizedPlatform, sanitizedVideoId, totalLimit, bSize, maxPerBucket);
 
-        const bucketLimits = densityMap.map(bucketInfo => {
-            const proportionalLimit = (bucketInfo.count / totalCommentsInVideo) * totalCommentLimit;
-            // Apply the cap, but also ensure we don't try to fetch more comments than exist in the bucket
-            const finalLimit = Math.ceil(Math.min(proportionalLimit, maxCommentsPerBucket, bucketInfo.count));
-            return {
-                bucket: bucketInfo.bucket,
-                limit: finalLimit
-            };
-        }).filter(b => b.limit > 0);
-
-        if (bucketLimits.length === 0) {
-            return { success: true, comments: [] };
+        if (result.success) {
+            await rateLimiter.recordRetrieval(clientIP, sanitizedUsername);
         }
 
-        // Pass 2: Build a single dynamic query to fetch the sampled comments
-        const whereClauses = bucketLimits.map(bl => sql`(rc.bucket = ${bl.bucket} AND rc.rn <= ${bl.limit})`);
-        
-        const finalQuery = sql`
-            WITH ranked_comments AS (
-                SELECT
-                    c.*,
-                    floor(c.time / ${bucketSize}) as bucket,
-                    ROW_NUMBER() OVER(PARTITION BY floor(c.time / ${bucketSize}) ORDER BY c.created_at DESC) as rn
-                FROM
-                    ${schema.comments} as c
-                WHERE
-                    c.video_id = ${video.id}
-            )
-            SELECT
-                rc.id, rc.content, rc.time, rc.user_id, rc.video_id, rc.scroll_mode, rc.color, rc.font_size, rc.created_at
-            FROM
-                ranked_comments rc
-            WHERE
-                ${sql.join(whereClauses, sql` OR `)}
-            ORDER BY
-                rc.time ASC;
-        `;
-        
-        const result: any = await db.execute(finalQuery);
-        const comments: Comment[] = Array.isArray(result) ? result : result.rows;
-
-
-        return { success: true, comments, source: 'database' };
-    } catch (error: any) {
+        return c.json(result);
+    } catch (error) {
         console.error("Error fetching comments:", error);
-        if (
-            error.code === "CONNECTION_ENDED" ||
-            error.errno === "CONNECTION_ENDED"
-        ) {
-            return { success: false, error: "Database connection issue", code: 'db_connection_error' };
-        }
-        return { success: false, error: "Failed to fetch comments", code: 'fetch_failed' };
+        return c.json(
+            { success: false, error: "Failed to fetch comments" },
+            500
+        );
     }
-}
-
-export async function getDisplayPlan(platform: string, videoId: string): Promise<{ success: boolean; plan?: any; error?: string }> {
-    const { success, comments, error } = await getComments(platform, videoId);
-
-    if (!success || !comments) {
-        return { success: false, error };
-    }
-
-    const plannedComments = comments.map(comment => {
-        const duration = 7000;
-        const width = comment.content.length * 12;
-        const lane = Math.floor(Math.random() * 10);
-
-        return {
-            ...comment,
-            duration,
-            width,
-            lane,
-        };
-    });
-
-    const displayPlan = {
-        videoId,
-        platform,
-        comments: plannedComments,
-        metadata: {
-            totalComments: plannedComments.length,
-            culledComments: 0,
-            processingTime: 0, 
-        },
-    };
-
-    return { success: true, plan: displayPlan };
-}
-
-
-export const addCommentSchema = z.object({
-    platform: z.string().min(1).max(63),
-    videoId: z.string().min(1).max(255),
-    time: z.number().int().min(0),
-    text: z.string().min(1).max(350),
-    color: z.string().regex(/^#([0-9a-f]{3}){1,2}$/i, { message: "Invalid hex color format" }).max(15),
-    userId: z.number().int().min(1),
-    scrollMode: z.enum(["slide", "top", "bottom"]),
-    fontSize: z.enum(["small", "normal", "large"]),
 });
 
-export type AddCommentInput = z.infer<typeof addCommentSchema>;
-
-export async function addComment(
-    platform: string,
-    videoId: string,
-    time: number,
-    text: string,
-    color: string,
-    userId: number,
-    scrollMode: "slide" | "top" | "bottom",
-    fontSize: "small" | "normal" | "large"
-): Promise<{ success: boolean; comment?: any; error?: string; code?: string }> {
-    const parseResult = addCommentSchema.safeParse({
-        platform,
-        videoId,
-        time,
-        text,
-        color,
-        userId,
-        scrollMode,
-        fontSize,
-    });
-    if (!parseResult.success) {
-        const firstError = parseResult.error.errors[0];
-        let code = "invalid_comment";
-        if (firstError.path[0] === "platform") code = "invalid_platform";
-        if (firstError.path[0] === "videoId") code = "invalid_videoId";
-        if (firstError.path[0] === "text")
-            code = firstError.message.includes("max")
-                ? "comment_too_long"
-                : "invalid_text";
-        if (firstError.path[0] === "color") code = "invalid_color";
-        if (firstError.path[0] === "time") code = "invalid_time";
-        if (firstError.path[0] === "scrollMode") code = "invalid_scrollMode";
-        if (firstError.path[0] === "fontSize") code = "invalid_fontSize";
-        return {
-            success: false,
-            error: firstError.message,
-            code,
-        };
-    }
-
+app.post("/addComment", authMiddleware, async (c) => {
     try {
-        const video = await db
-            .insert(schema.videos)
-            .values({ platform, videoId })
-            .onConflictDoUpdate({
-                target: [schema.videos.platform, schema.videos.videoId],
-                set: { videoId },
-            })
-            .returning()
-            .then((res) => res[0]);
+        const user = c.get("user");
+        const { platform, videoId, time, text, color, scrollMode, fontSize } =
+            await c.req.json();
 
-        const newComment = await db
-            .insert(schema.comments)
-            .values({
-                content: text,
-                time,
-                userId: userId,
-                videoId: video.id,
-                scrollMode,
-                color,
-                fontSize,
-            })
-            .returning();
-        
-        return { success: true, comment: newComment[0] };
-    } catch (error: any) {
+
+        if (!platform || !videoId || time === undefined || !text) {
+            return c.json(
+                {
+                    success: false,
+                    error: "Missing required fields: platform, videoId, time, text",
+                },
+                400
+            );
+        }
+
+        const sanitizedPlatform = sanitizeHtml(platform, {
+            allowedTags: [],
+            allowedAttributes: {},
+        });
+        const sanitizedVideoId = sanitizeHtml(videoId, {
+            allowedTags: [],
+            allowedAttributes: {},
+        });
+        const sanitizedText = sanitizeHtml(text);
+        const sanitizedColor = color
+            ? sanitizeHtml(color, { allowedTags: [], allowedAttributes: {} })
+            : "#ffffff";
+        const sanitizedScrollMode = scrollMode
+            ? sanitizeHtml(scrollMode, {
+                  allowedTags: [],
+                  allowedAttributes: {},
+              })
+            : "slide";
+        const sanitizedFontSize = fontSize
+            ? sanitizeHtml(fontSize, { allowedTags: [], allowedAttributes: {} })
+            : "normal";
+
+        const clientIP =
+            c.req.header("x-forwarded-for") ||
+            c.req.header("x-real-ip") ||
+            "unknown";
+
+        const rateLimitCheck = await rateLimiter.checkRateLimit(
+            clientIP,
+            user.username
+        );
+        if (!rateLimitCheck.allowed) {
+            return c.json(
+                {
+                    success: false,
+                    error: rateLimitCheck.error,
+                    type: "rate_limit",
+                },
+                429
+            );
+        }
+
+        const result = await addComment(
+            sanitizedPlatform,
+            sanitizedVideoId,
+            Number(time),
+            sanitizedText,
+            sanitizedColor,
+            user.id,
+            sanitizedScrollMode as any,
+            sanitizedFontSize as any
+        );
+
+        if (result.success) {
+            await rateLimiter.recordComment(clientIP, user.username);
+        }
+
+        return c.json(result);
+    } catch (error) {
         console.error("Error adding comment:", error);
-        if (
-            error.code === "CONNECTION_ENDED" ||
-            error.errno === "CONNECTION_ENDED"
-        ) {
-            return { success: false, error: "Database connection issue", code: 'db_connection_error' };
-        }
-        return { success: false, error: "Failed to add comment", code: 'add_failed' };
+        return c.json({ success: false, error: "Failed to add comment" }, 500);
     }
-}
-
-export const reportCommentSchema = z.object({
-    commentId: z.number().int().min(1),
-    reason: z.string().min(1).max(255),
-    additionalDetails: z.string().max(500).optional(),
 });
 
-export async function reportComment(
-    commentId: number,
-    reporterUserId: number,
-    reason: string,
-    additionalDetails?: string
-): Promise<{ success: boolean; error?: string; code?: string }> {
-    const validation = reportCommentSchema.safeParse({
-        commentId,
-        reason,
-        additionalDetails,
-    });
-
-    if (!validation.success) {
-        return { success: false, error: validation.error.errors[0].message, code: 'validation_failed' };
-    }
-
+app.post("/reportComment", authMiddleware, async (c) => {
     try {
-        const comment = await db.query.comments.findFirst({
-            where: eq(schema.comments.id, commentId),
-        });
+        const user = c.get("user");
+        const { commentId, reason, additionalDetails } = await c.req.json();
 
-        if (!comment) {
-            return { success: false, error: "Comment not found", code: 'comment_not_found' };
+        if (!commentId || !reason) {
+            return c.json(
+                { success: false, error: "Missing commentId or reason" },
+                400
+            );
         }
 
-        await db.insert(schema.commentReports).values({
+        const result = await reportComment(
             commentId,
-            reporterUserId,
+            user.id,
             reason,
-            additionalDetails: additionalDetails || null,
-        });
+            additionalDetails
+        );
 
-        return { success: true };
+        if (!result.success) {
+            return c.json(result, 400);
+        }
+
+        return c.json(result);
     } catch (error) {
         console.error("Error reporting comment:", error);
-        return { success: false, error: "Failed to report comment", code: 'report_failed' };
+        return c.json(
+            { success: false, error: "Failed to report comment" },
+            500
+        );
     }
+});
+
+
+
+if (process.env.NODE_ENV !== "test") {
+    validateOrInitDatabase();
 }
 
-export async function deleteComment(
-    commentId: number
-): Promise<{ success: boolean; error?: string }> {
-    try {
-        if (process.env.NODE_ENV === "test") {
-            const timeoutPromise = new Promise((_, reject) => {
-                setTimeout(
-                    () => reject(new Error("Database operation timeout")),
-                    1000
-                );
-            });
+function parsePort() {
+    const args = process.argv.slice(2);
+    let port = process.env.PORT || 3000;
 
-            try {
-                const deleted = (await Promise.race([
-                    db
-                        .delete(schema.comments)
-                        .where(eq(schema.comments.id, commentId))
-                        .returning(),
-                    timeoutPromise,
-                ])) as any[];
-
-                if (deleted.length === 0) {
-                    return { success: false, error: "Comment not found" };
-                }
-
-                return { success: true };
-            } catch (error) {
-                console.warn(
-                    `Database operation timed out for comment ${commentId}, continuing...`
-                );
-                return { success: false, error: "Database operation timed out" };
+    for (let i = 0; i < args.length; i++) {
+        if ((args[i] === "--port" || args[i] === "-P") && args[i + 1]) {
+            port = parseInt(args[i + 1], 10);
+            if (isNaN(port)) {
+                console.error("Invalid port number provided");
+                process.exit(1);
             }
-        } else {
-            const timeoutPromise = new Promise((_, reject) => {
-                setTimeout(
-                    () => reject(new Error("Database operation timeout")),
-                    10000
-                );
-            });
-
-            const deleted = (await Promise.race([
-                db
-                    .delete(schema.comments)
-                    .where(and(eq(schema.comments.id, commentId)))
-                    .returning(),
-                timeoutPromise,
-            ])) as any[];
-
-            if (deleted.length === 0) {
-                return {
-                    success: false,
-                    error: "Comment not found or not owned by user",
-                };
-            }
-
-            return { success: true };
+            break;
         }
-    } catch (error: any) {
-        console.error("Error deleting comment:", error);
-        if (error.message === "Database operation timeout") {
-            return { success: false, error: "Database operation timed out" };
-        }
-        if (
-            error.code === "CONNECTION_ENDED" ||
-            error.errno === "CONNECTION_ENDED"
-        ) {
-            return { success: false, error: "Database connection issue" };
-        }
-        return { success: false, error: "Failed to delete comment" };
     }
+
+    return port;
 }
 
-export async function deleteUser(
-    userId: number
-): Promise<{ success: boolean; error?: string }> {
-    try {
-        if (process.env.NODE_ENV === "test") {
-            const timeoutPromise = new Promise((_, reject) => {
-                setTimeout(
-                    () => reject(new Error("Database operation timeout")),
-                    1000
-                );
-            });
+const port = parsePort();
 
-            try {
-                const deleted = (await Promise.race([
-                    db
-                        .delete(schema.users)
-                        .where(eq(schema.users.id, userId))
-                        .returning(),
-                    timeoutPromise,
-                ])) as any[];
+let serverExport: any;
 
-                if (deleted.length === 0) {
-                    return { success: false, error: "User not found" };
-                }
-
-                return { success: true };
-            } catch (error) {
-                console.warn(
-                    `Database operation timed out for user ${userId}, continuing...`
-                );
-                return { success: false, error: "Database operation timed out" };
-            }
-        } else {
-            const deleted = await db
-                .delete(schema.users)
-                .where(eq(schema.users.id, userId))
-                .returning();
-
-            if (deleted.length === 0) {
-                return { success: false, error: "User not found" };
-            }
-
-            return { success: true };
-        }
-    } catch (error: any) {
-        console.error("Error deleting user:", error);
-        if (
-            error.code === "CONNECTION_ENDED" ||
-            error.errno === "CONNECTION_ENDED"
-        ) {
-            return { success: false, error: "Database connection issue" };
-        }
-        return { success: false, error: "Failed to delete user" };
-    }
+if (process.env.NODE_ENV === "test") {
+    serverExport = app;
+} else {
+    serverExport = {
+        port,
+        fetch: app.fetch,
+    };
 }
 
-export async function deleteVideo(
-    platform: string,
-    videoId: string
-): Promise<{ success: boolean; error?: string }> {
-    try {
-        if (process.env.NODE_ENV === "test") {
-            const timeoutPromise = new Promise((_, reject) => {
-                setTimeout(
-                    () => reject(new Error("Database operation timeout")),
-                    1000
-                );
-            });
-
-            try {
-                const video = (await Promise.race([
-                    db.query.videos.findFirst({
-                        where: and(
-                            eq(schema.videos.platform, platform),
-                            eq(schema.videos.videoId, videoId)
-                        ),
-                    }),
-                    timeoutPromise,
-                ])) as any;
-
-                if (!video) {
-                    return { success: true };
-                }
-
-                await Promise.race([
-                    db
-                        .delete(schema.videos)
-                        .where(eq(schema.videos.id, video.id)),
-                    timeoutPromise,
-                ]);
-
-                return { success: true };
-            } catch (error) {
-                console.warn(
-                    `Database operation timed out for video ${platform}:${videoId}, continuing...`
-                );
-                return { success: false, error: "Database operation timed out" };
-            }
-        } else {
-            const timeoutPromise = new Promise((_, reject) => {
-                setTimeout(
-                    () => reject(new Error("Database operation timeout")),
-                    10000
-                );
-            });
-
-            const video = (await Promise.race([
-                db.query.videos.findFirst({
-                    where: and(
-                        eq(schema.videos.platform, platform),
-                        eq(schema.videos.videoId, videoId)
-                    ),
-                }),
-                timeoutPromise,
-            ])) as any;
-
-            if (!video) {
-                return { success: false, error: "Video not found" };
-            }
-
-            await Promise.race([
-                db
-                    .delete(schema.comments)
-                    .where(eq(schema.comments.videoId, video.id)),
-                timeoutPromise,
-            ]);
-
-            const deleted = (await Promise.race([
-                db
-                    .delete(schema.videos)
-                    .where(eq(schema.videos.id, video.id))
-                    .returning(),
-                timeoutPromise,
-            ])) as any[];
-
-            if (deleted.length === 0) {
-                return { success: false, error: "Failed to delete video" };
-            }
-
-            return { success: true };
-        }
-    } catch (error: any) {
-        console.error("Error deleting video:", error);
-        if (error.message === "Database operation timeout") {
-            return { success: false, error: "Database operation timed out" };
-        }
-        if (
-            error.code === "CONNECTION_ENDED" ||
-            error.errno === "CONNECTION_ENDED"
-        ) {
-            return { success: false, error: "Database connection issue" };
-        }
-        return { success: false, error: "Failed to delete video" };
-    }
-}
-
-export async function closeDbConnection() {
-    try {
-        if (process.env.NODE_ENV === "test") {
-            setTimeout(() => {
-                client.end({ timeout: 10 }).catch(() => {});
-            }, 200);
-        } else {
-            await client.end({ timeout: 10 });
-        }
-    } catch (error) {
-        console.error("Error closing database connection:", error);
-    }
-}
-
-export default db;
+export default serverExport;
