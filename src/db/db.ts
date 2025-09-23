@@ -4,6 +4,7 @@ import { migrate } from "drizzle-orm/postgres-js/migrator";
 import path from "path";
 import * as schema from "./schema";
 import { z } from "zod";
+import { verify } from "hono/jwt";
 
 const postgres = require("postgres").default;
 let connectionString = process.env.DATABASE_URL;
@@ -27,6 +28,79 @@ const connectionOptions = {
 
 const client = postgres(connectionString, connectionOptions);
 const db = drizzle(client, { schema });
+
+const secret = process.env.JWT_SECRET || '';
+
+if (!secret) {
+    throw new Error("JWT_SECRET environment variable is not set");
+}
+
+export async function verifyAuthToken(authToken: string): Promise<{ success: boolean; userId?: number; error?: string }> {
+    try {
+        if (!authToken || authToken.trim() === "") {
+            return { success: false, error: "Invalid token" };
+        }
+
+        const decodedPayload = await verify(authToken, secret);
+        if (!decodedPayload || !decodedPayload.sub) {
+            return { success: false, error: "Invalid token" };
+        }
+
+        if (decodedPayload.exp && Date.now() / 1000 > decodedPayload.exp) {
+            return { success: false, error: "Token expired" };
+        }
+
+        const tokenRecord = await db.query.authTokens.findFirst({
+            where: and(
+                eq(schema.authTokens.token, authToken),
+                eq(schema.authTokens.userId, Number(decodedPayload.sub))
+            ),
+        });
+
+        if (!tokenRecord) {
+            return { success: false, error: "Invalid token" };
+        }
+
+        const sixMonthsAgo = new Date();
+        sixMonthsAgo.setMonth(sixMonthsAgo.getMonth() - 6);
+
+        if (tokenRecord.lastUsedAt < sixMonthsAgo) {
+            await db
+                .delete(schema.authTokens)
+                .where(eq(schema.authTokens.id, tokenRecord.id));
+            return { success: false, error: "Token expired due to inactivity" };
+        }
+
+        await db
+            .update(schema.authTokens)
+            .set({ lastUsedAt: new Date() })
+            .where(eq(schema.authTokens.id, tokenRecord.id));
+
+        const user = await db.query.users.findFirst({
+            where: eq(schema.users.id, Number(decodedPayload.sub)),
+        });
+
+        if (!user) {
+            return { success: false, error: "User not found" };
+        }
+
+        return { success: true, userId: user.id };
+    } catch (error: any) {
+        const isExpectedJwtError = error.name === "JwtTokenExpired" || 
+                                 error.name === "JwtTokenInvalid" || 
+                                 error.name === "JwtAlgorithmNotImplemented" ||
+                                 error.name === "JwtTokenNotBefore";
+        
+        if (!isExpectedJwtError && process.env.NODE_ENV !== "test") {
+            console.log("Unexpected auth error:", error);
+        }
+        
+        if (error.name === "JwtTokenExpired") {
+            return { success: false, error: "Token expired" };
+        }
+        return { success: false, error: "Invalid token" };
+    }
+}
 
 export async function runMigrations() {
     try {
@@ -59,7 +133,6 @@ export async function validateOrInitDatabase() {
 type Comment = Omit<typeof schema.comments.$inferSelect, 'userId' | 'videoId'> & {
     user_id: number;
     video_id: number;
-    like_score?: number;
 };
 
 
@@ -121,22 +194,17 @@ export async function getComments(
                 SELECT
                     c.*,
                     floor(c.time / ${bucketSize}) as bucket,
-                    COALESCE(SUM(cl.is_like), 0) as like_score,
                     ROW_NUMBER() OVER(
                         PARTITION BY floor(c.time / ${bucketSize}) 
-                        ORDER BY COALESCE(SUM(cl.is_like), 0) DESC, c.created_at DESC
+                        ORDER BY c.created_at DESC
                     ) as rn
                 FROM
                     ${schema.comments} as c
-                LEFT JOIN
-                    ${schema.commentLikes} as cl ON c.id = cl.comment_id
                 WHERE
                     c.video_id = ${video.id}
-                GROUP BY
-                    c.id, c.content, c.time, c.user_id, c.video_id, c.scroll_mode, c.color, c.font_size, c.created_at
             )
             SELECT
-                rc.id, rc.content, rc.time, rc.user_id, rc.video_id, rc.scroll_mode, rc.color, rc.font_size, rc.created_at, rc.like_score
+                rc.id, rc.content, rc.time, rc.user_id, rc.video_id, rc.scroll_mode, rc.color, rc.font_size, rc.created_at
             FROM
                 ranked_comments rc
             WHERE
@@ -169,7 +237,7 @@ export const addCommentSchema = z.object({
     time: z.number().int().min(0),
     text: z.string().min(1).max(350),
     color: z.string().regex(/^#([0-9a-f]{3}){1,2}$/i, { message: "Invalid hex color format" }).max(15),
-    userId: z.number().int().min(1),
+    authToken: z.string().min(1),
     scrollMode: z.enum(["slide", "top", "bottom"]),
     fontSize: z.enum(["small", "normal", "large"]),
 });
@@ -182,7 +250,7 @@ export async function addComment(
     time: number,
     text: string,
     color: string,
-    userId: number,
+    authToken: string,
     scrollMode: "slide" | "top" | "bottom",
     fontSize: "small" | "normal" | "large"
 ): Promise<{ success: boolean; comment?: any; error?: string; code?: string }> {
@@ -192,7 +260,7 @@ export async function addComment(
         time,
         text,
         color,
-        userId,
+        authToken,
         scrollMode,
         fontSize,
     });
@@ -209,10 +277,21 @@ export async function addComment(
         if (firstError.path[0] === "time") code = "invalid_time";
         if (firstError.path[0] === "scrollMode") code = "invalid_scrollMode";
         if (firstError.path[0] === "fontSize") code = "invalid_fontSize";
+        if (firstError.path[0] === "authToken") code = "invalid_auth_token";
         return {
             success: false,
             error: firstError.message,
             code,
+        };
+    }
+
+    // Verify auth token and get user ID
+    const authResult = await verifyAuthToken(authToken);
+    if (!authResult.success) {
+        return {
+            success: false,
+            error: authResult.error || "Authentication failed",
+            code: "auth_failed",
         };
     }
 
@@ -232,7 +311,7 @@ export async function addComment(
             .values({
                 content: text,
                 time,
-                userId: userId,
+                userId: authResult.userId!,
                 videoId: video.id,
                 scrollMode,
                 color,
@@ -257,22 +336,34 @@ export const reportCommentSchema = z.object({
     commentId: z.number().int().min(1),
     reason: z.string().min(1).max(255),
     additionalDetails: z.string().max(500).optional(),
+    authToken: z.string().min(1),
 });
 
 export async function reportComment(
     commentId: number,
-    reporterUserId: number,
+    authToken: string,
     reason: string,
     additionalDetails?: string
 ): Promise<{ success: boolean; error?: string; code?: string }> {
     const validation = reportCommentSchema.safeParse({
         commentId,
+        authToken,
         reason,
         additionalDetails,
     });
 
     if (!validation.success) {
         return { success: false, error: validation.error.errors[0].message, code: 'validation_failed' };
+    }
+
+    // Verify auth token and get user ID
+    const authResult = await verifyAuthToken(authToken);
+    if (!authResult.success) {
+        return {
+            success: false,
+            error: authResult.error || "Authentication failed",
+            code: "auth_failed",
+        };
     }
 
     try {
@@ -286,7 +377,7 @@ export async function reportComment(
 
         await db.insert(schema.commentReports).values({
             commentId,
-            reporterUserId,
+            reporterUserId: authResult.userId!,
             reason,
             additionalDetails: additionalDetails || null,
         });
@@ -299,9 +390,32 @@ export async function reportComment(
 }
 
 export async function deleteComment(
-    commentId: number
+    commentId: number,
+    authToken: string
 ): Promise<{ success: boolean; error?: string }> {
+    // Verify auth token and get user ID
+    const authResult = await verifyAuthToken(authToken);
+    if (!authResult.success) {
+        return {
+            success: false,
+            error: authResult.error || "Authentication failed",
+        };
+    }
+
     try {
+        // First check if the comment exists and is owned by the user
+        const comment = await db.query.comments.findFirst({
+            where: eq(schema.comments.id, commentId),
+        });
+
+        if (!comment) {
+            return { success: false, error: "Comment not found" };
+        }
+
+        if (comment.userId !== authResult.userId) {
+            return { success: false, error: "Not authorized to delete this comment" };
+        }
+
         if (process.env.NODE_ENV === "test") {
             const timeoutPromise = new Promise((_, reject) => {
                 setTimeout(
@@ -314,13 +428,16 @@ export async function deleteComment(
                 const deleted = (await Promise.race([
                     db
                         .delete(schema.comments)
-                        .where(eq(schema.comments.id, commentId))
+                        .where(and(
+                            eq(schema.comments.id, commentId),
+                            eq(schema.comments.userId, authResult.userId!)
+                        ))
                         .returning(),
                     timeoutPromise,
                 ])) as any[];
 
                 if (deleted.length === 0) {
-                    return { success: false, error: "Comment not found" };
+                    return { success: false, error: "Comment not found or not owned by user" };
                 }
 
                 return { success: true };
@@ -341,7 +458,10 @@ export async function deleteComment(
             const deleted = (await Promise.race([
                 db
                     .delete(schema.comments)
-                    .where(and(eq(schema.comments.id, commentId)))
+                    .where(and(
+                        eq(schema.comments.id, commentId),
+                        eq(schema.comments.userId, authResult.userId!)
+                    ))
                     .returning(),
                 timeoutPromise,
             ])) as any[];
@@ -528,9 +648,19 @@ export async function deleteVideo(
 
 export async function likeComment(
     commentId: number,
-    userId: number,
+    authToken: string,
     isLike: boolean
 ): Promise<{ success: boolean; error?: string; code?: string }> {
+    // Verify auth token and get user ID
+    const authResult = await verifyAuthToken(authToken);
+    if (!authResult.success) {
+        return {
+            success: false,
+            error: authResult.error || "Authentication failed",
+            code: "auth_failed",
+        };
+    }
+
     try {
         // Check if comment exists
         const comment = await db.query.comments.findFirst({
@@ -538,38 +668,77 @@ export async function likeComment(
         });
 
         if (!comment) {
-            return { success: false, error: "Comment not found", code: 'comment_not_found' };
+            return { success: false, error: 'Comment not found', code: 'comment_not_found' };
         }
 
-        const likeValue = isLike ? 1 : -1;
+        // Check if user already liked the comment
+        const existingLike = await db.query.commentLikes.findFirst({
+            where: and(
+                eq(schema.commentLikes.commentId, commentId),
+                eq(schema.commentLikes.userId, authResult.userId!)
+            ),
+        });
 
-        // Insert or update the like
-        await db
-            .insert(schema.commentLikes)
-            .values({
-                commentId,
-                userId,
-                isLike: likeValue,
-            })
-            .onConflictDoUpdate({
-                target: [schema.commentLikes.commentId, schema.commentLikes.userId],
-                set: { 
-                    isLike: likeValue,
-                    updatedAt: sql`now()`,
-                },
-            });
+        if (isLike) {
+            if (existingLike) {
+                return { success: false, error: 'User already liked this comment', code: 'already_liked' };
+            }
 
-        return { success: true };
+            const result = await db
+                .insert(schema.commentLikes)
+                .values({
+                    commentId,
+                    userId: authResult.userId!,
+                    liked: true,
+                })
+                .returning();
+
+            if (result.length === 0) {
+                return { success: false, error: 'Failed to insert like', code: 'insert_failed' };
+            }
+
+            return { success: true };
+        } else {
+            if (!existingLike) {
+                return { success: false, error: "User hasn't liked this comment yet", code: 'not_liked_yet' };
+            }
+
+            const result = await db
+                .delete(schema.commentLikes)
+                .where(
+                    and(
+                        eq(schema.commentLikes.commentId, commentId),
+                        eq(schema.commentLikes.userId, authResult.userId!)
+                    )
+                )
+                .returning();
+
+            if (result.length === 0) {
+                return { success: false, error: 'Failed to remove like', code: 'delete_failed' };
+            }
+
+            return { success: true };
+        }
     } catch (error) {
-        console.error("Error liking comment:", error);
-        return { success: false, error: "Failed to like comment", code: 'like_failed' };
+        console.error('Error processing like:', error);
+        return { success: false, error: 'Failed to process like', code: 'operation_failed' };
     }
 }
 
 export async function removeLike(
     commentId: number,
-    userId: number
+    authToken: string
 ): Promise<{ success: boolean; error?: string; code?: string }> {
+    // Verify auth token and get user ID
+    const authResult = await verifyAuthToken(authToken);
+    if (!authResult.success) {
+        return {
+            success: false,
+            error: authResult.error || "Authentication failed",
+            code: "auth_failed",
+        };
+    }
+
     try {
         // Check if comment exists
         const comment = await db.query.comments.findFirst({
@@ -586,7 +755,7 @@ export async function removeLike(
             .where(
                 and(
                     eq(schema.commentLikes.commentId, commentId),
-                    eq(schema.commentLikes.userId, userId)
+                    eq(schema.commentLikes.userId, authResult.userId!)
                 )
             );
 

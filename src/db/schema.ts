@@ -8,8 +8,10 @@ import {
     index,
     pgEnum,
     text,
+    boolean,
 } from "drizzle-orm/pg-core";
 import { relations } from "drizzle-orm";
+// import { boolean } from "drizzle-orm/gel-core";
 
 export const scrollModeEnum = pgEnum("scroll_mode_enum", [
     "slide",
@@ -116,7 +118,7 @@ export const commentLikes = pgTable(
         userId: integer("user_id")
             .notNull()
             .references(() => users.id, { onDelete: "cascade" }),
-        isLike: integer("is_like").notNull(), // 1 for like, -1 for dislike, 0 for neutral/removed
+        liked: boolean("liked").notNull(),
         createdAt: timestamp("created_at").defaultNow().notNull(),
         updatedAt: timestamp("updated_at").defaultNow().notNull(),
     },

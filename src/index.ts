@@ -8,6 +8,7 @@ import {
     likeComment,
     removeLike,
     getCommentLikes,
+    deleteComment,
 } from "./db/db";
 import { rateLimiter } from "./rateLimit";
 import packageJson from "../package.json";
@@ -172,6 +173,8 @@ app.get("/getComments", async (c) => {
 app.post("/addComment", authMiddleware, async (c) => {
     try {
         const user = c.get("user");
+        const authHeader = c.req.header("Authorization");
+        const authToken = authHeader?.substring(7); // Remove "Bearer " prefix
         const { platform, videoId, time, text, color, scrollMode, fontSize } =
             await c.req.json();
 
@@ -234,7 +237,7 @@ app.post("/addComment", authMiddleware, async (c) => {
             Number(time),
             sanitizedText,
             sanitizedColor,
-            user.id,
+            authToken!,
             sanitizedScrollMode as any,
             sanitizedFontSize as any
         );
@@ -253,6 +256,8 @@ app.post("/addComment", authMiddleware, async (c) => {
 app.post("/reportComment", authMiddleware, async (c) => {
     try {
         const user = c.get("user");
+        const authHeader = c.req.header("Authorization");
+        const authToken = authHeader?.substring(7); // Remove "Bearer " prefix
         const { commentId, reason, additionalDetails } = await c.req.json();
 
         if (!commentId || !reason) {
@@ -264,7 +269,7 @@ app.post("/reportComment", authMiddleware, async (c) => {
 
         const result = await reportComment(
             commentId,
-            user.id,
+            authToken!,
             reason,
             additionalDetails
         );
@@ -286,6 +291,8 @@ app.post("/reportComment", authMiddleware, async (c) => {
 app.post("/likeComment", authMiddleware, async (c) => {
     try {
         const user = c.get("user");
+        const authHeader = c.req.header("Authorization");
+        const authToken = authHeader?.substring(7); // Remove "Bearer " prefix
         const { commentId, isLike } = await c.req.json();
 
         if (commentId === undefined || isLike === undefined) {
@@ -302,7 +309,7 @@ app.post("/likeComment", authMiddleware, async (c) => {
             );
         }
 
-        const result = await likeComment(commentId, user.id, isLike);
+        const result = await likeComment(commentId, authToken!, isLike);
 
         if (!result.success) {
             return c.json(result, 400);
@@ -321,6 +328,8 @@ app.post("/likeComment", authMiddleware, async (c) => {
 app.post("/removeLike", authMiddleware, async (c) => {
     try {
         const user = c.get("user");
+        const authHeader = c.req.header("Authorization");
+        const authToken = authHeader?.substring(7); // Remove "Bearer " prefix
         const { commentId } = await c.req.json();
 
         if (!commentId) {
@@ -330,7 +339,7 @@ app.post("/removeLike", authMiddleware, async (c) => {
             );
         }
 
-        const result = await removeLike(commentId, user.id);
+        const result = await removeLike(commentId, authToken!);
 
         if (!result.success) {
             return c.json(result, 400);
@@ -341,6 +350,36 @@ app.post("/removeLike", authMiddleware, async (c) => {
         console.error("Error removing like:", error);
         return c.json(
             { success: false, error: "Failed to remove like" },
+            500
+        );
+    }
+});
+
+app.post("/deleteComment", authMiddleware, async (c) => {
+    try {
+        const user = c.get("user");
+        const authHeader = c.req.header("Authorization");
+        const authToken = authHeader?.substring(7); // Remove "Bearer " prefix
+        const { commentId } = await c.req.json();
+
+        if (!commentId) {
+            return c.json(
+                { success: false, error: "Missing commentId" },
+                400
+            );
+        }
+
+        const result = await deleteComment(commentId, authToken!);
+
+        if (!result.success) {
+            return c.json(result, 400);
+        }
+
+        return c.json(result);
+    } catch (error) {
+        console.error("Error deleting comment:", error);
+        return c.json(
+            { success: false, error: "Failed to delete comment" },
             500
         );
     }

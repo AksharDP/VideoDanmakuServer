@@ -1,6 +1,6 @@
 import db, { deleteUser, deleteVideo, deleteComment } from "../src/db/db";
 import { comments, videos, users, authTokens } from "../src/db/schema";
-import { eq } from "drizzle-orm";
+import { eq, and } from "drizzle-orm";
 import { rateLimiter } from "../src/rateLimit";
 import bcrypt from "bcrypt";
 
@@ -40,76 +40,77 @@ export async function cleanupDatabase() {
         // Reset rate limiter to ensure clean state between tests
         rateLimiter.resetForTests();
         
-        // In test environment, we can rely on cascade deletes
-        // Delete users first, which will cascade delete comments and auth tokens
-        console.log(`Cleaning up ${createdData.userIds.length} test users...`);
-        for (const userId of createdData.userIds) {
-            try {
-                console.log(`Deleting user ${userId}...`);
-                const result = await Promise.race([
-                    deleteUser(userId),
-                    new Promise<{ success: boolean; error?: string }>((_, reject) => 
-                        setTimeout(() => reject(new Error("User deletion timeout")), 2000)
-                    )
-                ]);
-                
-                if (!result.success) {
-                    console.warn(`Failed to delete user ${userId}: ${result.error}`);
-                } else {
-                    console.log(`Successfully deleted user ${userId}`);
-                }
-            } catch (error) {
-                console.warn(`Failed to delete user ${userId}:`, error);
-            }
-            // Very small delay
-            await new Promise(resolve => setTimeout(resolve, 10));
-        }
+        console.log(`Starting cleanup: ${createdData.userIds.length} users, ${createdData.videoIdentifiers.length} videos, ${createdData.commentIds.length} comments...`);
         
-        // Delete videos (which will cascade delete any remaining comments)
-        console.log(`Cleaning up ${createdData.videoIdentifiers.length} test videos...`);
-        for (const videoIdentifier of createdData.videoIdentifiers) {
-            try {
-                const result = await Promise.race([
-                    deleteVideo(videoIdentifier.platform, videoIdentifier.videoId),
-                    new Promise<{ success: boolean; error?: string }>((_, reject) => 
-                        setTimeout(() => reject(new Error("Video deletion timeout")), 2000)
-                    )
-                ]);
-                
-                if (!result.success) {
-                    console.warn(`Failed to delete video ${videoIdentifier.platform}:${videoIdentifier.videoId}: ${result.error}`);
-                }
-            } catch (error) {
-                console.warn(`Failed to delete video ${videoIdentifier.platform}:${videoIdentifier.videoId}:`, error);
-            }
-            // Very small delay
-            await new Promise(resolve => setTimeout(resolve, 10));
-        }
+        // For test environment, use direct database operations with timeout protection
         
-        // Clean up any orphaned comments (shouldn't be necessary with cascade deletes)
-        console.log(`Cleaning up ${createdData.commentIds.length} test comments...`);
-        for (const commentId of createdData.commentIds) {
-            try {
-                const result = await deleteComment(commentId);
-                if (!result.success && !result.error?.includes("not found")) {
-                    console.warn(`Failed to delete comment ${commentId}: ${result.error}`);
+        // Cleanup with timeout protection
+        const cleanupPromise = async () => {
+            // Delete in reverse order to handle foreign key constraints
+            // Comments first
+            if (createdData.commentIds.length > 0) {
+                for (const commentId of createdData.commentIds) {
+                    try {
+                        await db.delete(comments).where(eq(comments.id, commentId));
+                    } catch (error) {
+                        // Ignore individual failures
+                    }
                 }
-            } catch (error) {
-                console.warn(`Failed to delete comment ${commentId}:`, error);
             }
-        }
-
-        console.log(`Test cleanup completed. Deleted ${createdData.commentIds.length} comments, ${createdData.videoIdentifiers.length} videos, and ${createdData.userIds.length} users.`);
-
-        // Reset the tracking arrays for the next test run
-        createdData = {
-            userIds: [],
-            videoIdentifiers: [],
-            commentIds: [],
+            
+            // Then auth tokens
+            if (createdData.userIds.length > 0) {
+                for (const userId of createdData.userIds) {
+                    try {
+                        await db.delete(authTokens).where(eq(authTokens.userId, userId));
+                    } catch (error) {
+                        // Ignore individual failures
+                    }
+                }
+            }
+            
+            // Then videos
+            if (createdData.videoIdentifiers.length > 0) {
+                for (const videoIdentifier of createdData.videoIdentifiers) {
+                    try {
+                        await db.delete(videos).where(
+                            and(
+                                eq(videos.platform, videoIdentifier.platform),
+                                eq(videos.videoId, videoIdentifier.videoId)
+                            )
+                        );
+                    } catch (error) {
+                        // Ignore individual failures
+                    }
+                }
+            }
+            
+            // Finally users
+            if (createdData.userIds.length > 0) {
+                for (const userId of createdData.userIds) {
+                    try {
+                        await db.delete(users).where(eq(users.id, userId));
+                    } catch (error) {
+                        // Ignore individual failures
+                    }
+                }
+            }
         };
+
+        // Run cleanup with timeout
+        await Promise.race([
+            cleanupPromise(),
+            new Promise((_, reject) => {
+                setTimeout(() => reject(new Error("Cleanup timeout")), 5000);
+            })
+        ]);
+
+        console.log("Test cleanup completed successfully");
+        
     } catch (error) {
-        console.error("Error in cleanup:", error);
-        // Reset anyway to avoid carrying over to next test
+        console.warn("Cleanup encountered issues but continuing:", error);
+    } finally {
+        // Always reset the tracking arrays
         createdData = {
             userIds: [],
             videoIdentifiers: [],
