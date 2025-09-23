@@ -103,7 +103,7 @@ app.get("/ping", (c) => {
 
 app.get("/getComments", async (c) => {
     try {
-        const { platform, videoId, username, totalCommentLimit, bucketSize, maxCommentsPerBucket } = c.req.query();
+        const { platform, videoId, username, limit, bucketSize, maxCommentsPerBucket } = c.req.query();
 
         if (!platform || !videoId) {
             return c.json(
@@ -149,7 +149,7 @@ app.get("/getComments", async (c) => {
         });
 
         // Parse and validate new parameters with defaults
-        const totalLimit = totalCommentLimit ? parseInt(totalCommentLimit, 10) : 1000;
+        const totalLimit = limit ? parseInt(limit, 10) : 1000;
         const bSize = bucketSize ? parseInt(bucketSize, 10) : 5;
         const maxPerBucket = maxCommentsPerBucket ? parseInt(maxCommentsPerBucket, 10) : 25;
 
