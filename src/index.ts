@@ -125,20 +125,20 @@ app.get("/getComments", async (c) => {
             c.req.header("x-real-ip") ||
             "unknown";
 
-        const rateLimitCheck = await rateLimiter.checkRetrievalRateLimit(
-            clientIP,
-            sanitizedUsername
-        );
-        if (!rateLimitCheck.allowed) {
-            return c.json(
-                {
-                    success: false,
-                    error: rateLimitCheck.error,
-                    type: "rate_limit",
-                },
-                429
-            );
-        }
+        // const rateLimitCheck = await rateLimiter.checkRetrievalRateLimit(
+        //     clientIP,
+        //     sanitizedUsername
+        // );
+        // if (!rateLimitCheck.allowed) {
+        //     return c.json(
+        //         {
+        //             success: false,
+        //             error: rateLimitCheck.error,
+        //             type: "rate_limit",
+        //         },
+        //         429
+        //     );
+        // }
 
         const sanitizedPlatform = sanitizeHtml(platform, {
             allowedTags: [],
