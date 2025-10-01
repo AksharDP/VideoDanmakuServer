@@ -28,7 +28,7 @@ const app = new Hono();
 app.use('/*', honoCors({
     origin: [
         'https://www.youtube.com',
-        'https://www.crunchyroll.com'
+        'https://www.static.crunchyroll.com'
     ],
     allowMethods: ['GET', 'POST'],
     allowHeaders: ['Content-Type', 'Authorization', 'X-Forwarded-For', 'X-Real-IP'],
